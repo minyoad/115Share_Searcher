@@ -431,74 +431,74 @@ class Crawler115Engine:
                             limit=page_size,
                         )
 
-                            data_payload = snap_data.get("data", {})
+                        data_payload = snap_data.get("data", {})
 
-                            if not extracted_meta["title"]:
-                                share_info = data_payload.get("share_info", {})
-                                title = (
-                                    share_info.get("share_title")
-                                    or share_info.get("title")
-                                    or data_payload.get("share_title")
-                                    or data_payload.get("user_name")
-                                    or f"115 分享 ({share_code})"
-                                )
-                                extracted_meta["title"] = title
-                                share_obj.title = title
+                        if not extracted_meta["title"]:
+                            share_info = data_payload.get("share_info", {})
+                            title = (
+                                share_info.get("share_title")
+                                or share_info.get("title")
+                                or data_payload.get("share_title")
+                                or data_payload.get("user_name")
+                                or f"115 分享 ({share_code})"
+                            )
+                            extracted_meta["title"] = title
+                            share_obj.title = title
 
-                            item_list = data_payload.get("list", [])
-                            total_in_dir = data_payload.get("count", len(item_list))
+                        item_list = data_payload.get("list", [])
+                        total_in_dir = data_payload.get("count", len(item_list))
 
-                            local_files = 0
-                            local_folders = 0
-                            local_bytes = 0
+                        local_files = 0
+                        local_folders = 0
+                        local_bytes = 0
 
-                            for item in item_list:
-                                raw_fid = item.get("fid")
-                                raw_cid = item.get("cid")
-                                item_name = str(item.get("n", "")).strip()
-                                if not item_name:
-                                    continue
+                        for item in item_list:
+                            raw_fid = item.get("fid")
+                            raw_cid = item.get("cid")
+                            item_name = str(item.get("n", "")).strip()
+                            if not item_name:
+                                continue
 
-                                is_directory = raw_fid is None or (raw_cid is not None and not raw_fid)
-                                node_id = str(raw_cid if is_directory else raw_fid)
-                                item_size = int(item.get("s", 0) or 0)
-                                item_sha1 = str(item.get("sha1", "") or "").lower()
+                            is_directory = raw_fid is None or (raw_cid is not None and not raw_fid)
+                            node_id = str(raw_cid if is_directory else raw_fid)
+                            item_size = int(item.get("s", 0) or 0)
+                            item_sha1 = str(item.get("sha1", "") or "").lower()
 
-                                normalized_path = posixpath.normpath(
-                                    posixpath.join(current_virtual_path, item_name)
-                                )
+                            normalized_path = posixpath.normpath(
+                                posixpath.join(current_virtual_path, item_name)
+                            )
 
-                                if is_directory:
-                                    extension = ""
-                                    local_folders += 1
-                                    await dir_queue.put((node_id, normalized_path))
-                                else:
-                                    _, ext = posixpath.splitext(item_name)
-                                    extension = ext.lstrip(".").lower()
-                                    local_files += 1
-                                    local_bytes += item_size
+                            if is_directory:
+                                extension = ""
+                                local_folders += 1
+                                await dir_queue.put((node_id, normalized_path))
+                            else:
+                                _, ext = posixpath.splitext(item_name)
+                                extension = ext.lstrip(".").lower()
+                                local_files += 1
+                                local_bytes += item_size
 
-                                file_record = {
-                                    "share_id": share_obj.id,
-                                    "file_115_id": node_id,
-                                    "parent_115_id": current_cid,
-                                    "name": item_name,
-                                    "extension": extension,
-                                    "size": item_size,
-                                    "is_dir": is_directory,
-                                    "sha1": item_sha1,
-                                    "full_path": normalized_path,
-                                }
-                                await db_write_queue.put(file_record)
+                            file_record = {
+                                "share_id": share_obj.id,
+                                "file_115_id": node_id,
+                                "parent_115_id": current_cid,
+                                "name": item_name,
+                                "extension": extension,
+                                "size": item_size,
+                                "is_dir": is_directory,
+                                "sha1": item_sha1,
+                                "full_path": normalized_path,
+                            }
+                            await db_write_queue.put(file_record)
 
-                            async with stats_lock:
-                                stats["files"] += local_files
-                                stats["folders"] += local_folders
-                                stats["bytes"] += local_bytes
+                        async with stats_lock:
+                            stats["files"] += local_files
+                            stats["folders"] += local_folders
+                            stats["bytes"] += local_bytes
 
-                            offset += len(item_list)
-                            if offset >= total_in_dir or not item_list:
-                                break
+                        offset += len(item_list)
+                        if offset >= total_in_dir or not item_list:
+                            break
 
                     except Exception as exc:
                         logger.error(f"[Worker-{worker_id}] Error traversing cid={current_cid}: {exc}")
