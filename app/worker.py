@@ -10,7 +10,12 @@ import redis.asyncio as aioredis
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.crawler import Crawler115Engine, ShareCrawlerError
+from app.crawler import (
+    Crawler115Engine,
+    ShareBannedError,
+    ShareCrawlerError,
+    ShareExpiredOrInvalidError,
+)
 from app.database import AsyncSessionLocal, init_db
 from app.models import Share, ShareStatus
 
@@ -163,6 +168,10 @@ async def process_task(task_data: dict, crawler: Crawler115Engine) -> None:
                 receive_code=receive_code
             )
             logger.info(f"Task {task_id} completed successfully for {share_code}")
+        except ShareExpiredOrInvalidError as err:
+            logger.warning(f"Task {task_id} share expired or extraction code invalid for {share_code}: {err}")
+        except ShareBannedError as err:
+            logger.warning(f"Task {task_id} share banned or blocked for {share_code}: {err}")
         except ShareCrawlerError as err:
             logger.warning(f"Task {task_id} crawler business error for {share_code}: {err}")
         except Exception as exc:

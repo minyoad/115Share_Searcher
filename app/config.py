@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     CRAWLER_COOKIE: str = Field(default="", description="Optional 115 VIP/User Cookie to bypass rate limits")
     CRAWLER_REFERER: str = "https://115.com/"
     CRAWLER_SNAP_URL: str = "https://webapi.115.com/share/snap"
-    CRAWLER_DEFAULT_METHOD: str = "POST"  # 115 web client uses POST with form-data to avoid 405
+    CRAWLER_DEFAULT_METHOD: str = "GET"  # 115 web client uses GET for /share/snap (with automatic fallback to POST)
     CRAWLER_PAGE_SIZE: int = 100   # 115 Snap API standard safe batch size (100 or 115)
     CRAWLER_CONCURRENCY: int = 2   # Safe concurrent directory workers per share (avoiding IP burst rate limit)
     CRAWLER_BATCH_UPSERT_SIZE: int = 500  # Pipeline DB batch write size

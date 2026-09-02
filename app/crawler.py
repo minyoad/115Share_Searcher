@@ -85,16 +85,18 @@ class HttpClientPool:
 
     async def get_client(self, proxy_url: Optional[str] = None) -> httpx.AsyncClient:
         async with self._lock:
-            if proxy_url not in self._clients or self._clients[proxy_url].is_closed:
-                client = httpx.AsyncClient(
-                    proxy=proxy_url,
-                    limits=self.limits,
-                    timeout=self.timeout,
-                    verify=False,
-                    follow_redirects=True,
-                )
-                self._clients[proxy_url] = client
-            return self._clients[proxy_url]
+            key = proxy_url or "__DIRECT__"
+            if key not in self._clients or self._clients[key].is_closed:
+                client_kwargs: Dict[str, Any] = {
+                    "limits": self.limits,
+                    "timeout": self.timeout,
+                    "verify": False,
+                    "follow_redirects": True,
+                }
+                if proxy_url:
+                    client_kwargs["proxy"] = proxy_url
+                self._clients[key] = httpx.AsyncClient(**client_kwargs)
+            return self._clients[key]
 
     async def close_all(self):
         async with self._lock:
@@ -110,12 +112,11 @@ class HttpClientPool:
 class Crawler115Engine:
     """
     115 分享快照递归爬虫引擎 (对齐 115 官方 Web 端 + AList / OpenList 底层驱动)
-    - 默认采用 POST + Form-Data (115 Web 官方标准请求模式，免疫 405 Method Not Allowed)
-    - 支持 POST <-> GET 自适应双向 Fallback
-    - 采用全局 Pacer 严控 QPS，杜绝突发并发
-    - 遭遇 405 自动触发阶梯式指数退避与全局熔断
+    - 默认采用 GET (115 官方 Web 端标准)，支持 GET <-> POST 自适应智能 Fallback
+    - 严格通过全局 Pacer 调度器平滑 QPS，杜绝突发并发冲击
+    - 遭遇 405 WAF 自动触发阶梯式指数退避、智能切换与代理池隔离
     - 自动清理 WAF 脏 Cookie (剔除易触发拦截的 acw_tc / acw_sc__v2)
-    - 保留核心三件套 (UID, CID, SEID)
+    - 保留核心鉴权标识 (UID, CID, SEID)
     """
 
     SNAP_URL = "https://webapi.115.com/share/snap"
@@ -159,16 +160,16 @@ class Crawler115Engine:
         return "; ".join(clean_parts)
 
     def _get_headers(
-        self, share_code: str = "", receive_code: str = "", method: str = "POST"
+        self, share_code: str = "", receive_code: str = "", method: str = "GET"
     ) -> Dict[str, str]:
         """
         根据请求方法构造与 115 官方 Web 前端完全一致的请求头
         """
-        referer = (
-            f"https://115.com/s/{share_code}?password={receive_code}"
-            if share_code
-            else "https://115.com/"
-        )
+        if share_code:
+            referer = f"https://115.com/s/{share_code}?password={receive_code}" if receive_code else f"https://115.com/s/{share_code}"
+        else:
+            referer = "https://115.com/"
+
         headers = {
             "User-Agent": self.user_agent,
             "Referer": referer,
@@ -206,7 +207,7 @@ class Crawler115Engine:
         limit: int = 100,
     ) -> Dict[str, Any]:
         """
-        以 115 Web 官方标准规范获取目录快照 (支持多代理池轮换、POST/GET 自适应与 405 WAF 智能隔离)
+        以 115 Web 官方标准规范获取目录快照 (支持多代理池轮换、GET/POST 自适应与 405 WAF 智能隔离)
         """
         params = {
             "share_code": share_code,
@@ -237,6 +238,11 @@ class Crawler115Engine:
                 headers = self._get_headers(share_code, receive_code, method=current_method)
                 t_start = asyncio.get_running_loop().time()
 
+                logger.info(
+                    f"[{current_method}] Fetching 115 snap for share_code={share_code}, cid={cid}, "
+                    f"offset={offset}, limit={limit} (proxy: {current_proxy or 'DIRECT'})"
+                )
+
                 if current_method == "POST":
                     response = await client.post(
                         self.SNAP_URL,
@@ -252,26 +258,25 @@ class Crawler115Engine:
                         timeout=self.timeout,
                     )
 
-                # 405 WAF 防火墙 / 限制处理
+                # 405 WAF 防火墙 / 方法限制处理
                 if response.status_code == 405:
                     logger.warning(
                         f"115 WAF 405 on {current_method} (proxy: {current_proxy or 'DIRECT'}) "
                         f"for share_code={share_code}, cid={cid}. Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES}"
                     )
-                    # 隔离被封代理并强制轮换
                     if current_proxy:
                         await proxy_mgr.mark_failure(current_proxy, is_405=True, reason="WAF 405 Blocked")
                         force_rotate = True
 
-                    # 若未启用代理（直连模式），触发全局退避熔断
+                    # 切换请求方法并退避
+                    current_method = "POST" if current_method == "GET" else "GET"
+
                     if proxy_mgr.mode == "OFF":
                         await pacer.trigger_cooldown(backoff)
-                        current_method = "GET" if current_method == "POST" else "POST"
                         retries += 1
                         await asyncio.sleep(backoff)
                         backoff = min(backoff * 1.6, 10.0)
                     else:
-                        # 代理池模式下，快速换下一个可用 IP 继续请求
                         retries += 1
                         await asyncio.sleep(0.3)
                     continue
@@ -291,22 +296,34 @@ class Crawler115Engine:
                     continue
 
                 result = response.json()
+                state = result.get("state", False)
+                msg = str(result.get("msg") or result.get("error") or "")
+                err_no = result.get("errNo") or result.get("code")
 
                 # 业务状态码判断
-                if not result.get("state", False):
-                    msg = str(result.get("msg") or result.get("error", "Unknown 115 error"))
-                    error_code = result.get("errNo") or result.get("code")
+                if not state:
+                    logger.warning(
+                        f"115 snap returned state=false for share_code={share_code}, cid={cid}: "
+                        f"msg='{msg}', errNo={err_no}"
+                    )
 
-                    if any(x in msg for x in ["已失效", "不存在", "取消", "提取码错误", "不存在或已删除"]):
-                        raise ShareExpiredOrInvalidError(f"Share expired or password invalid: {msg}")
-                    if any(x in msg for x in ["违规", "屏蔽", "封禁", "安全"]):
-                        raise ShareBannedError(f"Share banned: {msg}")
+                    if any(x in msg for x in ["已失效", "不存在", "取消", "提取码错误", "不存在或已删除", "密码错误"]):
+                        raise ShareExpiredOrInvalidError(f"Share expired or password invalid: {msg or 'Invalid share'}")
+                    if any(x in msg for x in ["违规", "屏蔽", "封禁", "安全", "敏感"]):
+                        raise ShareBannedError(f"Share banned or blocked: {msg or 'Banned share'}")
 
-                    logger.warning(f"115 state=false: msg='{msg}', code={error_code}. Retrying...")
                     retries += 1
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 1.5, 8.0)
                     continue
+
+                data_payload = result.get("data", {})
+                item_list = data_payload.get("list", [])
+                count = data_payload.get("count", len(item_list))
+                logger.info(
+                    f"Successfully fetched 115 snap page for share={share_code}, cid={cid}, "
+                    f"offset={offset}: found {len(item_list)} items (total in dir: {count})"
+                )
 
                 # 记录代理成功请求与延迟
                 latency_ms = (asyncio.get_running_loop().time() - t_start) * 1000
@@ -315,8 +332,14 @@ class Crawler115Engine:
 
                 return result
 
-            except (httpx.RequestError, httpx.TimeoutException) as exc:
-                logger.warning(f"Network error on {self.SNAP_URL} via {current_proxy or 'DIRECT'}: {exc}")
+            except (ShareExpiredOrInvalidError, ShareBannedError):
+                raise
+
+            except Exception as exc:
+                logger.warning(
+                    f"Request error fetching {self.SNAP_URL} for share={share_code}, cid={cid} "
+                    f"via {current_proxy or 'DIRECT'}: {exc}"
+                )
                 if current_proxy:
                     await proxy_mgr.mark_failure(current_proxy, is_405=False, reason=str(exc)[:60])
                     force_rotate = True
@@ -357,7 +380,7 @@ class Crawler115Engine:
 
         effective_pwd = receive_code or share_obj.receive_code or ""
 
-        dir_queue: asyncio.Queue[Tuple[str, str]] = asyncio.Queue()
+        dir_queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
         await dir_queue.put(("0", "/"))
 
         db_write_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue(maxsize=5000)
@@ -368,6 +391,8 @@ class Crawler115Engine:
         extracted_meta = {"title": None}
         stats = {"files": 0, "folders": 0, "bytes": 0}
         stats_lock = asyncio.Lock()
+        fatal_error: List[Optional[Exception]] = [None]
+        stop_event = asyncio.Event()
 
         # 全局限速与熔断器
         pacer = GlobalPacer(
@@ -403,13 +428,21 @@ class Crawler115Engine:
         db_writer_task = asyncio.create_task(db_writer())
 
         async def dir_worker(worker_id: int):
-            while True:
+            while not stop_event.is_set():
                 try:
-                    current_cid, current_virtual_path = await asyncio.wait_for(
-                        dir_queue.get(), timeout=3.0
-                    )
-                except asyncio.TimeoutError:
+                    item = await dir_queue.get()
+                except asyncio.CancelledError:
                     break
+
+                if item is None:
+                    dir_queue.task_done()
+                    break
+
+                if fatal_error[0] is not None or stop_event.is_set():
+                    dir_queue.task_done()
+                    break
+
+                current_cid, current_virtual_path = item
 
                 async with visited_lock:
                     if current_cid in visited_cids:
@@ -421,7 +454,7 @@ class Crawler115Engine:
                     offset = 0
                     page_size = settings.CRAWLER_PAGE_SIZE
 
-                    while True:
+                    while not stop_event.is_set():
                         snap_data = await self._fetch_snap_page(
                             http_pool=http_pool,
                             proxy_mgr=proxy_mgr,
@@ -503,59 +536,91 @@ class Crawler115Engine:
                             break
 
                 except Exception as exc:
-                    logger.error(f"[Worker-{worker_id}] Error traversing cid={current_cid}: {exc}")
+                    logger.error(f"[Worker-{worker_id}] Error traversing share_code={share_code}, cid={current_cid}: {exc}")
+                    fatal_error[0] = exc
+                    stop_event.set()
                     raise
                 finally:
                     dir_queue.task_done()
 
-            try:
-                concurrency = max(1, settings.CRAWLER_CONCURRENCY)
-                workers = [
-                    asyncio.create_task(dir_worker(i))
-                    for i in range(concurrency)
-                ]
+        concurrency = max(1, settings.CRAWLER_CONCURRENCY)
+        workers = [
+            asyncio.create_task(dir_worker(i))
+            for i in range(concurrency)
+        ]
 
-                await dir_queue.join()
-                await asyncio.gather(*workers, return_exceptions=True)
+        try:
+            # 等待所有已加入队列的目录任务处理完成（或者遇到致命错误提前退出）
+            queue_join_task = asyncio.create_task(dir_queue.join())
+            
+            while not queue_join_task.done():
+                if fatal_error[0] is not None:
+                    # 某个 worker 报错，快速取消其他 worker
+                    stop_event.set()
+                    queue_join_task.cancel()
+                    break
+                await asyncio.sleep(0.1)
 
-                await db_write_queue.put(None)
-                await db_write_queue.join()
-                await db_writer_task
+            # 向所有 worker 发送退出哨兵
+            for _ in range(concurrency):
+                await dir_queue.put(None)
 
-                share_obj.status = ShareStatus.ACTIVE.value
-                share_obj.file_count = stats["files"]
-                share_obj.folder_count = stats["folders"]
-                share_obj.total_size = stats["bytes"]
-                share_obj.last_crawled_at = datetime.now(timezone.utc)
-                await db.commit()
-                await db.refresh(share_obj)
+            worker_results = await asyncio.gather(*workers, return_exceptions=True)
 
-                logger.info(
-                    f"Successfully finished crawl for {share_code}: "
-                    f"files={stats['files']}, folders={stats['folders']}, "
-                    f"size={stats['bytes'] / (1024**3):.2f} GB"
-                )
-                return share_obj
+            # 如果记录了致命错误，优先抛出
+            if fatal_error[0] is not None:
+                raise fatal_error[0]
 
-            except ShareExpiredOrInvalidError as err:
-                logger.error(f"Marking share {share_code} as EXPIRED: {err}")
-                share_obj.status = ShareStatus.EXPIRED.value
-                await db.commit()
-                raise
+            for res in worker_results:
+                if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
+                    raise res
 
-            except ShareBannedError as err:
-                logger.error(f"Marking share {share_code} as BANNED: {err}")
-                share_obj.status = ShareStatus.BANNED.value
-                await db.commit()
-                raise
+            await db_write_queue.put(None)
+            await db_write_queue.join()
+            await db_writer_task
 
-            except Exception as exc:
-                logger.exception(f"Unexpected error crawling {share_code}: {exc}")
-                await db.rollback()
-                raise ShareCrawlerError(f"Crawl failed: {exc}") from exc
+            share_obj.status = ShareStatus.ACTIVE.value
+            share_obj.file_count = stats["files"]
+            share_obj.folder_count = stats["folders"]
+            share_obj.total_size = stats["bytes"]
+            share_obj.last_crawled_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(share_obj)
 
-            finally:
-                await http_pool.close_all()
+            logger.info(
+                f"Successfully finished crawl for {share_code}: "
+                f"files={stats['files']}, folders={stats['folders']}, "
+                f"size={stats['bytes'] / (1024**3):.2f} GB"
+            )
+            return share_obj
+
+        except ShareExpiredOrInvalidError as err:
+            logger.error(f"Marking share {share_code} as EXPIRED: {err}")
+            share_obj.status = ShareStatus.EXPIRED.value
+            share_obj.last_crawled_at = datetime.now(timezone.utc)
+            await db.commit()
+            raise
+
+        except ShareBannedError as err:
+            logger.error(f"Marking share {share_code} as BANNED: {err}")
+            share_obj.status = ShareStatus.BANNED.value
+            share_obj.last_crawled_at = datetime.now(timezone.utc)
+            await db.commit()
+            raise
+
+        except Exception as exc:
+            logger.exception(f"Unexpected error crawling {share_code}: {exc}")
+            await db.rollback()
+            raise ShareCrawlerError(f"Crawl failed: {exc}") from exc
+
+        finally:
+            stop_event.set()
+            for w in workers:
+                if not w.done():
+                    w.cancel()
+            if db_writer_task and not db_writer_task.done():
+                db_writer_task.cancel()
+            await http_pool.close_all()
 
     async def _bulk_upsert_files(self, db: AsyncSession, records: List[Dict[str, Any]]) -> None:
         if not records:
