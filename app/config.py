@@ -28,22 +28,23 @@ class Settings(BaseSettings):
     )
     QUEUE_NAME: str = "115_share_crawl_queue"
 
-    # 115 Crawler Engine Settings (Optimized for 10k+ Files / Deep Trees)
+    # 115 Crawler Engine Settings (Optimized for 10k+ Files / Deep Trees & Anti-405 WAF)
     CRAWLER_USER_AGENT: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     )
     CRAWLER_COOKIE: str = Field(default="", description="Optional 115 VIP/User Cookie to bypass rate limits")
     CRAWLER_REFERER: str = "https://115.com/"
     CRAWLER_SNAP_URL: str = "https://webapi.115.com/share/snap"
-    CRAWLER_METHOD: str = "POST"  # 115 webapi.115.com/share/snap prefers POST to prevent HTTP 405
+    CRAWLER_DEFAULT_METHOD: str = "POST"  # 115 web client uses POST with form-data to avoid 405
     CRAWLER_PAGE_SIZE: int = 100   # 115 Snap API standard safe batch size (100 or 115)
-    CRAWLER_CONCURRENCY: int = 4   # Concurrent directory crawlers per share
+    CRAWLER_CONCURRENCY: int = 2   # Safe concurrent directory workers per share (avoiding IP burst rate limit)
     CRAWLER_BATCH_UPSERT_SIZE: int = 500  # Pipeline DB batch write size
-    CRAWLER_RATE_MIN: float = 0.25  # seconds
-    CRAWLER_RATE_MAX: float = 0.60  # seconds
-    CRAWLER_MAX_RETRIES: int = 4
-    CRAWLER_TIMEOUT: float = 20.0
+    CRAWLER_RATE_MIN: float = 0.40  # Minimum delay between requests across all workers (seconds)
+    CRAWLER_RATE_MAX: float = 0.85  # Maximum delay between requests (seconds)
+    CRAWLER_BACKOFF_ON_405: float = 3.0  # Cooldown seconds when 115 WAF returns 405
+    CRAWLER_MAX_RETRIES: int = 5
+    CRAWLER_TIMEOUT: float = 25.0
 
     # Worker Settings
     CONCURRENCY: int = 4

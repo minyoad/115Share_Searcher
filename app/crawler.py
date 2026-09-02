@@ -31,13 +31,56 @@ class ShareBannedError(ShareCrawlerError):
     pass
 
 
+class GlobalPacer:
+    """
+    协程安全全局请求速率与 WAF 熔断同步器
+    1. 确保多个并行协程在请求 115 API 时，单次请求之间保持严格的最小间隔 (0.4s - 0.85s)，
+       彻底消除同一毫秒内的突发并发 (Burst QPS) 触发 115 WAF 405 拦截。
+    2. 当任一 worker 遭遇 405 时，触发全局冷却 (3.0s~5.0s)，让所有 worker 暂停发起新请求，
+       使 115 服务端 WAF 频率计数器平稳清零。
+    """
+    def __init__(self, min_delay: float = 0.40, max_delay: float = 0.85):
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self._lock = asyncio.Lock()
+        self._last_call_time = 0.0
+        self._cooldown_until = 0.0
+
+    async def acquire(self):
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+
+            # 若处于 405 WAF 熔断冷却期，等待冷却窗口结束
+            if now < self._cooldown_until:
+                wait_sec = self._cooldown_until - now
+                logger.info(f"[WAF Pacer] Pausing for {wait_sec:.2f}s to clear 115 WAF 405 cooldown window...")
+                await asyncio.sleep(wait_sec)
+                now = loop.time()
+
+            elapsed = now - self._last_call_time
+            target_delay = random.uniform(self.min_delay, self.max_delay)
+            if elapsed < target_delay:
+                await asyncio.sleep(target_delay - elapsed)
+
+            self._last_call_time = loop.time()
+
+    async def trigger_cooldown(self, seconds: float = 3.0):
+        """触发全局 WAF 405 冷却阻断"""
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            self._cooldown_until = max(self._cooldown_until, loop.time() + seconds)
+
+
 class Crawler115Engine:
     """
-    115 分享快照递归爬虫引擎 (对齐 AList / OpenList 底层驱动实现)
-    - 采用标准 GET 协议
+    115 分享快照递归爬虫引擎 (对齐 115 官方 Web 端 + AList / OpenList 底层驱动)
+    - 默认采用 POST + Form-Data (115 Web 官方标准请求模式，免疫 405 Method Not Allowed)
+    - 支持 POST <-> GET 自适应双向 Fallback
+    - 采用全局 Pacer 严控 QPS，杜绝突发并发
+    - 遭遇 405 自动触发阶梯式指数退避与全局熔断
     - 自动清理 WAF 脏 Cookie (剔除易触发拦截的 acw_tc / acw_sc__v2)
     - 保留核心三件套 (UID, CID, SEID)
-    - 精简 Headers，去除触发 WAF 阻断的 Origin / X-Requested-With
     """
 
     SNAP_URL = "https://webapi.115.com/share/snap"
@@ -80,9 +123,11 @@ class Crawler115Engine:
         
         return "; ".join(clean_parts)
 
-    def _get_headers(self, share_code: str = "", receive_code: str = "") -> Dict[str, str]:
+    def _get_headers(
+        self, share_code: str = "", receive_code: str = "", method: str = "POST"
+    ) -> Dict[str, str]:
         """
-        100% 对齐 AList/OpenList 的纯净请求头 (决不添加触发 405 WAF 的 Origin 头)
+        根据请求方法构造与 115 官方 Web 前端完全一致的请求头
         """
         referer = (
             f"https://115.com/s/{share_code}?password={receive_code}"
@@ -95,13 +140,18 @@ class Crawler115Engine:
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Connection": "keep-alive",
-            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="128", "Google Chrome";v="128"',
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
         }
+
+        if method.upper() == "POST":
+            headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+            headers["Origin"] = "https://115.com"
+            headers["X-Requested-With"] = "XMLHttpRequest"
         
         clean_cookie = self._sanitize_cookie(self.cookie)
         if clean_cookie:
@@ -112,6 +162,7 @@ class Crawler115Engine:
     async def _fetch_snap_page(
         self,
         client: httpx.AsyncClient,
+        pacer: GlobalPacer,
         share_code: str,
         receive_code: str,
         cid: str,
@@ -119,7 +170,7 @@ class Crawler115Engine:
         limit: int = 100,
     ) -> Dict[str, Any]:
         """
-        以 AList 规范的 GET 请求获取 115 目录快照
+        以 115 Web 官方标准规范获取目录快照 (支持 POST / GET 智能切换与 405 WAF 防护)
         """
         params = {
             "share_code": share_code,
@@ -132,30 +183,44 @@ class Crawler115Engine:
         }
 
         retries = 0
-        backoff = 0.8
+        backoff = settings.CRAWLER_BACKOFF_ON_405
+        current_method = settings.CRAWLER_DEFAULT_METHOD.upper()
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
             try:
-                delay = random.uniform(settings.CRAWLER_RATE_MIN, settings.CRAWLER_RATE_MAX)
-                await asyncio.sleep(delay)
+                # 严格通过全局调度器，杜绝突发并发冲击
+                await pacer.acquire()
 
-                headers = self._get_headers(share_code, receive_code)
-                response = await client.get(
-                    self.SNAP_URL,
-                    params=params,
-                    headers=headers,
-                    timeout=self.timeout,
-                )
+                headers = self._get_headers(share_code, receive_code, method=current_method)
 
-                # 如果返回 405 说明触发了 WAF 拦截或频控，等待后重试
+                if current_method == "POST":
+                    response = await client.post(
+                        self.SNAP_URL,
+                        data=params,
+                        headers=headers,
+                        timeout=self.timeout,
+                    )
+                else:
+                    response = await client.get(
+                        self.SNAP_URL,
+                        params=params,
+                        headers=headers,
+                        timeout=self.timeout,
+                    )
+
+                # 405 WAF 防火墙 / 限制处理
                 if response.status_code == 405:
                     logger.warning(
-                        f"WAF 405 protection triggered for share_code={share_code}, cid={cid}. "
-                        f"Backing off for {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
+                        f"115 WAF 405 on {current_method} for share_code={share_code}, cid={cid}. "
+                        f"Switching method & cooling down for {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
                     )
+                    # 触发全局冷却，防止其他 worker 继续发送请求
+                    await pacer.trigger_cooldown(backoff)
+                    # 切换请求方法 (POST <-> GET)
+                    current_method = "GET" if current_method == "POST" else "POST"
                     retries += 1
                     await asyncio.sleep(backoff)
-                    backoff *= 1.8
+                    backoff = min(backoff * 1.6, 10.0)
                     continue
 
                 if response.status_code != 200:
@@ -165,7 +230,7 @@ class Crawler115Engine:
                     )
                     retries += 1
                     await asyncio.sleep(backoff)
-                    backoff *= 1.8
+                    backoff = min(backoff * 1.5, 8.0)
                     continue
 
                 result = response.json()
@@ -183,16 +248,16 @@ class Crawler115Engine:
                     logger.warning(f"115 state=false: msg='{msg}', code={error_code}. Retrying...")
                     retries += 1
                     await asyncio.sleep(backoff)
-                    backoff *= 1.8
+                    backoff = min(backoff * 1.5, 8.0)
                     continue
 
                 return result
 
             except (httpx.RequestError, httpx.TimeoutException) as exc:
-                logger.warning(f"Network error on {self.SNAP_URL}: {exc}")
+                logger.warning(f"Network error on {self.SNAP_URL} ({current_method}): {exc}")
                 retries += 1
                 await asyncio.sleep(backoff)
-                backoff *= 1.8
+                backoff = min(backoff * 1.5, 8.0)
 
         raise ShareCrawlerError(
             f"Failed to fetch snap for share_code={share_code}, cid={cid} after {retries} retries"
@@ -236,8 +301,14 @@ class Crawler115Engine:
         stats = {"files": 0, "folders": 0, "bytes": 0}
         stats_lock = asyncio.Lock()
 
+        # 全局限速与熔断器
+        pacer = GlobalPacer(
+            min_delay=settings.CRAWLER_RATE_MIN,
+            max_delay=settings.CRAWLER_RATE_MAX
+        )
+
         http_limits = httpx.Limits(
-            max_keepalive_connections=30, max_connections=50, keepalive_expiry=30.0
+            max_keepalive_connections=20, max_connections=30, keepalive_expiry=30.0
         )
 
         async with httpx.AsyncClient(limits=http_limits, verify=True, follow_redirects=True) as client:
@@ -265,7 +336,7 @@ class Crawler115Engine:
                 while True:
                     try:
                         current_cid, current_virtual_path = await asyncio.wait_for(
-                            dir_queue.get(), timeout=2.5
+                            dir_queue.get(), timeout=3.0
                         )
                     except asyncio.TimeoutError:
                         break
@@ -283,6 +354,7 @@ class Crawler115Engine:
                         while True:
                             snap_data = await self._fetch_snap_page(
                                 client=client,
+                                pacer=pacer,
                                 share_code=share_code,
                                 receive_code=effective_pwd,
                                 cid=current_cid,
@@ -366,9 +438,10 @@ class Crawler115Engine:
                         dir_queue.task_done()
 
             try:
+                concurrency = max(1, settings.CRAWLER_CONCURRENCY)
                 workers = [
                     asyncio.create_task(dir_worker(i))
-                    for i in range(settings.CRAWLER_CONCURRENCY)
+                    for i in range(concurrency)
                 ]
 
                 await dir_queue.join()
@@ -429,3 +502,4 @@ class Crawler115Engine:
         )
         await db.execute(upsert_stmt)
         await db.commit()
+
