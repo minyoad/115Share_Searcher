@@ -450,17 +450,19 @@ class ReportShareResponse(BaseModel):
     name: 'crawler.py',
     path: 'app/crawler.py',
     language: 'python',
-    description: '115 高性能多协程 BFS 爬虫引擎 (并发遍历、1000条/页、解耦批量入库流水线)',
+    description: '115 高性能多端点 BFS 爬虫引擎 (自适应多域名、纯净请求头、并发遍历与批量入库)',
     content: `import asyncio
 import logging
 import posixpath
 import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
+
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
 from app.models import File, Share, ShareStatus
 
@@ -480,32 +482,62 @@ class ShareBannedError(ShareCrawlerError):
 
 
 class Crawler115Engine:
-    def __init__(self, user_agent: Optional[str] = None, cookie: Optional[str] = None, timeout: Optional[float] = None):
+    """
+    115 分享快照递归爬虫引擎 (自适应多端点 + 浏览器级原生请求)
+    """
+
+    # 115 快照 API 备用端点列表（自动故障转移）
+    SNAP_ENDPOINTS = [
+        "https://webapi.115.com/share/snap",
+        "https://anxia.115.com/web/share/snap",
+    ]
+
+    def __init__(
+        self,
+        user_agent: Optional[str] = None,
+        cookie: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ):
         self.user_agent = user_agent or settings.CRAWLER_USER_AGENT
         self.cookie = cookie or settings.CRAWLER_COOKIE
         self.timeout = timeout or settings.CRAWLER_TIMEOUT
-        self.snap_url = settings.CRAWLER_SNAP_URL
 
     def _get_headers(self, share_code: str = "", receive_code: str = "") -> Dict[str, str]:
-        referer = f"https://115.com/s/{share_code}?password={receive_code}" if share_code else settings.CRAWLER_REFERER
+        referer = (
+            f"https://115.com/s/{share_code}?password={receive_code}"
+            if share_code
+            else settings.CRAWLER_REFERER
+        )
         headers = {
             "User-Agent": self.user_agent,
             "Referer": referer,
-            "Origin": "https://115.com",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "X-Requested-With": "XMLHttpRequest",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Connection": "keep-alive",
+            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
         }
         if self.cookie:
             headers["Cookie"] = self.cookie
         return headers
 
     async def _fetch_snap_page(
-        self, client: httpx.AsyncClient, share_code: str, receive_code: str, cid: str, offset: int = 0, limit: int = 100
+        self,
+        client: httpx.AsyncClient,
+        share_code: str,
+        receive_code: str,
+        cid: str,
+        offset: int = 0,
+        limit: int = 100,
     ) -> Dict[str, Any]:
-        data_payload = {
+        """
+        请求 115 目录快照，支持多端点自适应尝试
+        """
+        params = {
             "share_code": share_code,
             "receive_code": receive_code,
             "cid": str(cid),
@@ -514,79 +546,113 @@ class Crawler115Engine:
             "asc": "1",
             "order": "user_ptime",
         }
+
         retries = 0
         backoff = 0.8
-        req_method = settings.CRAWLER_METHOD.upper()
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
-            try:
-                delay = random.uniform(settings.CRAWLER_RATE_MIN, settings.CRAWLER_RATE_MAX)
-                await asyncio.sleep(delay)
-                headers = self._get_headers(share_code, receive_code)
+            for url in self.SNAP_ENDPOINTS:
+                try:
+                    delay = random.uniform(settings.CRAWLER_RATE_MIN, settings.CRAWLER_RATE_MAX)
+                    await asyncio.sleep(delay)
 
-                if req_method == "POST":
-                    response = await client.post(self.snap_url, data=data_payload, headers=headers, timeout=self.timeout)
-                else:
-                    response = await client.get(self.snap_url, params=data_payload, headers=headers, timeout=self.timeout)
+                    headers = self._get_headers(share_code, receive_code)
+                    response = await client.get(
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=self.timeout,
+                    )
 
-                if response.status_code == 405:
-                    req_method = "GET" if req_method == "POST" else "POST"
-                    retries += 1
-                    await asyncio.sleep(0.5)
+                    if response.status_code == 405:
+                        logger.warning(
+                            f"Endpoint {url} returned 405 for share_code={share_code}, trying next endpoint..."
+                        )
+                        continue
+
+                    if response.status_code != 200:
+                        logger.warning(
+                            f"HTTP {response.status_code} from {url} for share_code={share_code}, cid={cid}. "
+                            f"Retrying in {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
+                        )
+                        continue
+
+                    result = response.json()
+
+                    # 业务状态码判断
+                    if not result.get("state", False):
+                        msg = str(result.get("msg") or result.get("error", "Unknown 115 error"))
+                        error_code = result.get("errNo") or result.get("code")
+
+                        if any(x in msg for x in ["已失效", "不存在", "取消", "提取码错误", "不存在或已删除"]):
+                            raise ShareExpiredOrInvalidError(f"Share expired or password invalid: {msg}")
+                        if any(x in msg for x in ["违规", "屏蔽", "封禁", "安全"]):
+                            raise ShareBannedError(f"Share banned: {msg}")
+
+                        logger.warning(f"115 state=false: msg='{msg}', code={error_code}. Retrying...")
+                        retries += 1
+                        await asyncio.sleep(backoff)
+                        backoff *= 1.8
+                        break
+
+                    return result
+
+                except (httpx.RequestError, httpx.TimeoutException) as exc:
+                    logger.warning(f"Network error on {url}: {exc}")
                     continue
 
-                if response.status_code != 200:
-                    retries += 1
-                    await asyncio.sleep(backoff)
-                    backoff *= 1.8
-                    continue
+            retries += 1
+            await asyncio.sleep(backoff)
+            backoff *= 1.8
 
-                result = response.json()
-                if not result.get("state", False):
-                    msg = str(result.get("msg") or result.get("error", "Unknown 115 error"))
-                    if any(x in msg for x in ["已失效", "不存在", "取消", "提取码错误"]):
-                        raise ShareExpiredOrInvalidError(f"Share expired or invalid: {msg}")
-                    if any(x in msg for x in ["违规", "屏蔽", "封禁"]):
-                        raise ShareBannedError(f"Share banned: {msg}")
-                    retries += 1
-                    await asyncio.sleep(backoff)
-                    backoff *= 2.0
-                    continue
-                return result
+        raise ShareCrawlerError(
+            f"Failed to fetch snap for share_code={share_code}, cid={cid} after {retries} retries"
+        )
 
-            except (httpx.RequestError, httpx.TimeoutException) as exc:
-                retries += 1
-                if retries > settings.CRAWLER_MAX_RETRIES:
-                    raise ShareCrawlerError(f"Network error after {retries} attempts: {exc}") from exc
-                await asyncio.sleep(backoff)
-                backoff *= 1.8
+    async def crawl_and_index(
+        self, db: AsyncSession, share_code: str, receive_code: str = ""
+    ) -> Share:
+        logger.info(f"Starting High-Performance BFS crawl for 115 share: {share_code}")
 
-        raise ShareCrawlerError(f"Failed to fetch snap for {share_code} cid={cid}")
-
-    async def crawl_and_index(self, db: AsyncSession, share_code: str, receive_code: str = "") -> Share:
         stmt = select(Share).where(Share.share_code == share_code)
         res = await db.execute(stmt)
         share_obj = res.scalar_one_or_none()
 
         if not share_obj:
-            share_obj = Share(share_code=share_code, receive_code=receive_code, status=ShareStatus.PENDING.value)
+            share_obj = Share(
+                share_code=share_code,
+                receive_code=receive_code,
+                status=ShareStatus.PENDING.value,
+                title="",
+            )
             db.add(share_obj)
+            await db.flush()
+        else:
+            share_obj.status = ShareStatus.PENDING.value
+            if receive_code and not share_obj.receive_code:
+                share_obj.receive_code = receive_code
             await db.flush()
 
         effective_pwd = receive_code or share_obj.receive_code or ""
+
         dir_queue: asyncio.Queue[Tuple[str, str]] = asyncio.Queue()
         await dir_queue.put(("0", "/"))
+
         db_write_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue(maxsize=5000)
 
         visited_cids: Set[str] = set()
         visited_lock = asyncio.Lock()
+
         extracted_meta = {"title": None}
         stats = {"files": 0, "folders": 0, "bytes": 0}
         stats_lock = asyncio.Lock()
 
-        http_limits = httpx.Limits(max_keepalive_connections=30, max_connections=50, keepalive_expiry=30.0)
+        http_limits = httpx.Limits(
+            max_keepalive_connections=30, max_connections=50, keepalive_expiry=30.0
+        )
 
-        async with httpx.AsyncClient(limits=http_limits, verify=True) as client:
+        async with httpx.AsyncClient(limits=http_limits, verify=True, follow_redirects=True) as client:
+
             async def db_writer():
                 buffer: List[Dict[str, Any]] = []
                 while True:
@@ -597,6 +663,7 @@ class Crawler115Engine:
                             buffer.clear()
                         db_write_queue.task_done()
                         break
+
                     buffer.append(item)
                     if len(buffer) >= settings.CRAWLER_BATCH_UPSERT_SIZE:
                         await self._bulk_upsert_files(db, buffer)
@@ -608,7 +675,9 @@ class Crawler115Engine:
             async def dir_worker(worker_id: int):
                 while True:
                     try:
-                        current_cid, current_virtual_path = await asyncio.wait_for(dir_queue.get(), timeout=2.5)
+                        current_cid, current_virtual_path = await asyncio.wait_for(
+                            dir_queue.get(), timeout=2.5
+                        )
                     except asyncio.TimeoutError:
                         break
 
@@ -621,19 +690,34 @@ class Crawler115Engine:
                     try:
                         offset = 0
                         page_size = settings.CRAWLER_PAGE_SIZE
+
                         while True:
                             snap_data = await self._fetch_snap_page(
-                                client, share_code, effective_pwd, current_cid, offset, page_size
+                                client=client,
+                                share_code=share_code,
+                                receive_code=effective_pwd,
+                                cid=current_cid,
+                                offset=offset,
+                                limit=page_size,
                             )
-                            payload = snap_data.get("data", {})
+
+                            data_payload = snap_data.get("data", {})
+
                             if not extracted_meta["title"]:
-                                s_info = payload.get("share_info", {})
-                                title = s_info.get("share_title") or payload.get("share_title") or f"115 分享 ({share_code})"
+                                share_info = data_payload.get("share_info", {})
+                                title = (
+                                    share_info.get("share_title")
+                                    or share_info.get("title")
+                                    or data_payload.get("share_title")
+                                    or data_payload.get("user_name")
+                                    or f"115 分享 ({share_code})"
+                                )
                                 extracted_meta["title"] = title
                                 share_obj.title = title
 
-                            item_list = payload.get("list", [])
-                            total_in_dir = payload.get("count", len(item_list))
+                            item_list = data_payload.get("list", [])
+                            total_in_dir = data_payload.get("count", len(item_list))
+
                             local_files = 0
                             local_folders = 0
                             local_bytes = 0
@@ -645,33 +729,37 @@ class Crawler115Engine:
                                 if not item_name:
                                     continue
 
-                                is_dir = raw_fid is None or (raw_cid is not None and not raw_fid)
-                                node_id = str(raw_cid if is_dir else raw_fid)
+                                is_directory = raw_fid is None or (raw_cid is not None and not raw_fid)
+                                node_id = str(raw_cid if is_directory else raw_fid)
                                 item_size = int(item.get("s", 0) or 0)
                                 item_sha1 = str(item.get("sha1", "") or "").lower()
-                                norm_path = posixpath.normpath(posixpath.join(current_virtual_path, item_name))
 
-                                if is_dir:
+                                normalized_path = posixpath.normpath(
+                                    posixpath.join(current_virtual_path, item_name)
+                                )
+
+                                if is_directory:
                                     extension = ""
                                     local_folders += 1
-                                    await dir_queue.put((node_id, norm_path))
+                                    await dir_queue.put((node_id, normalized_path))
                                 else:
                                     _, ext = posixpath.splitext(item_name)
                                     extension = ext.lstrip(".").lower()
                                     local_files += 1
                                     local_bytes += item_size
 
-                                await db_write_queue.put({
+                                file_record = {
                                     "share_id": share_obj.id,
                                     "file_115_id": node_id,
                                     "parent_115_id": current_cid,
                                     "name": item_name,
                                     "extension": extension,
                                     "size": item_size,
-                                    "is_dir": is_dir,
+                                    "is_dir": is_directory,
                                     "sha1": item_sha1,
-                                    "full_path": norm_path,
-                                })
+                                    "full_path": normalized_path,
+                                }
+                                await db_write_queue.put(file_record)
 
                             async with stats_lock:
                                 stats["files"] += local_files
@@ -681,11 +769,19 @@ class Crawler115Engine:
                             offset += len(item_list)
                             if offset >= total_in_dir or not item_list:
                                 break
+
+                    except Exception as exc:
+                        logger.error(f"[Worker-{worker_id}] Error traversing cid={current_cid}: {exc}")
+                        raise
                     finally:
                         dir_queue.task_done()
 
             try:
-                workers = [asyncio.create_task(dir_worker(i)) for i in range(settings.CRAWLER_CONCURRENCY)]
+                workers = [
+                    asyncio.create_task(dir_worker(i))
+                    for i in range(settings.CRAWLER_CONCURRENCY)
+                ]
+
                 await dir_queue.join()
                 await asyncio.gather(*workers, return_exceptions=True)
 
@@ -699,28 +795,50 @@ class Crawler115Engine:
                 share_obj.total_size = stats["bytes"]
                 share_obj.last_crawled_at = datetime.now(timezone.utc)
                 await db.commit()
+                await db.refresh(share_obj)
+
+                logger.info(
+                    f"Successfully finished crawl for {share_code}: "
+                    f"files={stats['files']}, folders={stats['folders']}, "
+                    f"size={stats['bytes'] / (1024**3):.2f} GB"
+                )
                 return share_obj
-            except Exception as exc:
-                await db.rollback()
+
+            except ShareExpiredOrInvalidError as err:
+                logger.error(f"Marking share {share_code} as EXPIRED: {err}")
+                share_obj.status = ShareStatus.EXPIRED.value
+                await db.commit()
                 raise
+
+            except ShareBannedError as err:
+                logger.error(f"Marking share {share_code} as BANNED: {err}")
+                share_obj.status = ShareStatus.BANNED.value
+                await db.commit()
+                raise
+
+            except Exception as exc:
+                logger.exception(f"Unexpected error crawling {share_code}: {exc}")
+                await db.rollback()
+                raise ShareCrawlerError(f"Crawl failed: {exc}") from exc
 
     async def _bulk_upsert_files(self, db: AsyncSession, records: List[Dict[str, Any]]) -> None:
         if not records:
             return
-        stmt = insert(File).values(records)
-        upsert = stmt.on_conflict_do_update(
+
+        insert_stmt = insert(File).values(records)
+        upsert_stmt = insert_stmt.on_conflict_do_update(
             constraint="uq_share_file_115_id",
             set_={
-                "parent_115_id": stmt.excluded.parent_115_id,
-                "name": stmt.excluded.name,
-                "extension": stmt.excluded.extension,
-                "size": stmt.excluded.size,
-                "is_dir": stmt.excluded.is_dir,
-                "sha1": stmt.excluded.sha1,
-                "full_path": stmt.excluded.full_path,
-            }
+                "parent_115_id": insert_stmt.excluded.parent_115_id,
+                "name": insert_stmt.excluded.name,
+                "extension": insert_stmt.excluded.extension,
+                "size": insert_stmt.excluded.size,
+                "is_dir": insert_stmt.excluded.is_dir,
+                "sha1": insert_stmt.excluded.sha1,
+                "full_path": insert_stmt.excluded.full_path,
+            },
         )
-        await db.execute(upsert)
+        await db.execute(upsert_stmt)
         await db.commit()`
   },
   {
