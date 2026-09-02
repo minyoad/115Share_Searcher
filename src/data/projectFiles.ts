@@ -138,7 +138,7 @@ aiofiles>=23.2.1`
     name: 'config.py',
     path: 'app/config.py',
     language: 'python',
-    description: '基于 Pydantic Settings v2 的环境变量与爬虫速率控制配置',
+    description: 'Pydantic Settings v2 配置管理与并发爬取速率限制',
     content: `from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     )
     QUEUE_NAME: str = "115_share_crawl_queue"
 
-    # 115 Crawler Engine Settings
+    # 115 Crawler Engine Settings (Optimized for 10k+ Files / Deep Trees)
     CRAWLER_USER_AGENT: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -173,11 +173,13 @@ class Settings(BaseSettings):
     CRAWLER_COOKIE: str = Field(default="", description="Optional 115 VIP/User Cookie to bypass rate limits")
     CRAWLER_REFERER: str = "https://115.com/"
     CRAWLER_SNAP_URL: str = "https://webapi.115.com/share/snap"
-    CRAWLER_PAGE_SIZE: int = 100
-    CRAWLER_RATE_MIN: float = 0.3  # seconds
-    CRAWLER_RATE_MAX: float = 0.8  # seconds
+    CRAWLER_PAGE_SIZE: int = 1000  # 115 Snap API supports up to 1000 items per call (10x faster)
+    CRAWLER_CONCURRENCY: int = 6   # Concurrent directory crawlers per share
+    CRAWLER_BATCH_UPSERT_SIZE: int = 1000  # Pipeline DB batch write size
+    CRAWLER_RATE_MIN: float = 0.15  # seconds
+    CRAWLER_RATE_MAX: float = 0.40  # seconds
     CRAWLER_MAX_RETRIES: int = 4
-    CRAWLER_TIMEOUT: float = 15.0
+    CRAWLER_TIMEOUT: float = 20.0
 
     # Worker Settings
     CONCURRENCY: int = 4
@@ -447,14 +449,13 @@ class ReportShareResponse(BaseModel):
     name: 'crawler.py',
     path: 'app/crawler.py',
     language: 'python',
-    description: '115 Snapshot API BFS 递归爬虫引擎 (全路径计算、批量 Upsert、指数退避)',
+    description: '115 高性能多协程 BFS 爬虫引擎 (并发遍历、1000条/页、解耦批量入库流水线)',
     content: `import asyncio
 import logging
 import posixpath
 import random
-from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -478,10 +479,10 @@ class ShareBannedError(ShareCrawlerError):
 
 
 class Crawler115Engine:
-    def __init__(self, user_agent: Optional[str] = None, cookie: Optional[str] = None, timeout: float = 15.0):
+    def __init__(self, user_agent: Optional[str] = None, cookie: Optional[str] = None, timeout: Optional[float] = None):
         self.user_agent = user_agent or settings.CRAWLER_USER_AGENT
         self.cookie = cookie or settings.CRAWLER_COOKIE
-        self.timeout = timeout
+        self.timeout = timeout or settings.CRAWLER_TIMEOUT
         self.snap_url = settings.CRAWLER_SNAP_URL
 
     def _get_headers(self) -> Dict[str, str]:
@@ -497,7 +498,7 @@ class Crawler115Engine:
         return headers
 
     async def _fetch_snap_page(
-        self, client: httpx.AsyncClient, share_code: str, receive_code: str, cid: str, offset: int = 0, limit: int = 100
+        self, client: httpx.AsyncClient, share_code: str, receive_code: str, cid: str, offset: int = 0, limit: int = 1000
     ) -> Dict[str, Any]:
         params = {
             "share_code": share_code,
@@ -509,7 +510,7 @@ class Crawler115Engine:
             "order": "user_ptime",
         }
         retries = 0
-        backoff = 1.0
+        backoff = 0.8
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
             try:
@@ -520,7 +521,7 @@ class Crawler115Engine:
                 if response.status_code != 200:
                     retries += 1
                     await asyncio.sleep(backoff)
-                    backoff *= 2.0
+                    backoff *= 1.8
                     continue
 
                 result = response.json()
@@ -541,7 +542,7 @@ class Crawler115Engine:
                 if retries > settings.CRAWLER_MAX_RETRIES:
                     raise ShareCrawlerError(f"Network error after {retries} attempts: {exc}") from exc
                 await asyncio.sleep(backoff)
-                backoff *= 2.0
+                backoff *= 1.8
 
         raise ShareCrawlerError(f"Failed to fetch snap for {share_code} cid={cid}")
 
@@ -555,105 +556,136 @@ class Crawler115Engine:
             db.add(share_obj)
             await db.flush()
 
-        async with httpx.AsyncClient(verify=True) as client:
-            queue: deque[Tuple[str, str]] = deque([("0", "/")])
-            visited_cids = set()
-            extracted_title: Optional[str] = None
-            total_files = 0
-            total_folders = 0
-            total_size = 0
-            pending_buffer: List[Dict[str, Any]] = []
+        effective_pwd = receive_code or share_obj.receive_code or ""
+        dir_queue: asyncio.Queue[Tuple[str, str]] = asyncio.Queue()
+        await dir_queue.put(("0", "/"))
+        db_write_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue(maxsize=5000)
+
+        visited_cids: Set[str] = set()
+        visited_lock = asyncio.Lock()
+        extracted_meta = {"title": None}
+        stats = {"files": 0, "folders": 0, "bytes": 0}
+        stats_lock = asyncio.Lock()
+
+        http_limits = httpx.Limits(max_keepalive_connections=30, max_connections=50, keepalive_expiry=30.0)
+
+        async with httpx.AsyncClient(limits=http_limits, verify=True) as client:
+            async def db_writer():
+                buffer: List[Dict[str, Any]] = []
+                while True:
+                    item = await db_write_queue.get()
+                    if item is None:
+                        if buffer:
+                            await self._bulk_upsert_files(db, buffer)
+                            buffer.clear()
+                        db_write_queue.task_done()
+                        break
+                    buffer.append(item)
+                    if len(buffer) >= settings.CRAWLER_BATCH_UPSERT_SIZE:
+                        await self._bulk_upsert_files(db, buffer)
+                        buffer.clear()
+                    db_write_queue.task_done()
+
+            db_writer_task = asyncio.create_task(db_writer())
+
+            async def dir_worker(worker_id: int):
+                while True:
+                    try:
+                        current_cid, current_virtual_path = await asyncio.wait_for(dir_queue.get(), timeout=2.5)
+                    except asyncio.TimeoutError:
+                        break
+
+                    async with visited_lock:
+                        if current_cid in visited_cids:
+                            dir_queue.task_done()
+                            continue
+                        visited_cids.add(current_cid)
+
+                    try:
+                        offset = 0
+                        page_size = settings.CRAWLER_PAGE_SIZE
+                        while True:
+                            snap_data = await self._fetch_snap_page(
+                                client, share_code, effective_pwd, current_cid, offset, page_size
+                            )
+                            payload = snap_data.get("data", {})
+                            if not extracted_meta["title"]:
+                                s_info = payload.get("share_info", {})
+                                title = s_info.get("share_title") or payload.get("share_title") or f"115 分享 ({share_code})"
+                                extracted_meta["title"] = title
+                                share_obj.title = title
+
+                            item_list = payload.get("list", [])
+                            total_in_dir = payload.get("count", len(item_list))
+                            local_files = 0
+                            local_folders = 0
+                            local_bytes = 0
+
+                            for item in item_list:
+                                raw_fid = item.get("fid")
+                                raw_cid = item.get("cid")
+                                item_name = str(item.get("n", "")).strip()
+                                if not item_name:
+                                    continue
+
+                                is_dir = raw_fid is None or (raw_cid is not None and not raw_fid)
+                                node_id = str(raw_cid if is_dir else raw_fid)
+                                item_size = int(item.get("s", 0) or 0)
+                                item_sha1 = str(item.get("sha1", "") or "").lower()
+                                norm_path = posixpath.normpath(posixpath.join(current_virtual_path, item_name))
+
+                                if is_dir:
+                                    extension = ""
+                                    local_folders += 1
+                                    await dir_queue.put((node_id, norm_path))
+                                else:
+                                    _, ext = posixpath.splitext(item_name)
+                                    extension = ext.lstrip(".").lower()
+                                    local_files += 1
+                                    local_bytes += item_size
+
+                                await db_write_queue.put({
+                                    "share_id": share_obj.id,
+                                    "file_115_id": node_id,
+                                    "parent_115_id": current_cid,
+                                    "name": item_name,
+                                    "extension": extension,
+                                    "size": item_size,
+                                    "is_dir": is_dir,
+                                    "sha1": item_sha1,
+                                    "full_path": norm_path,
+                                })
+
+                            async with stats_lock:
+                                stats["files"] += local_files
+                                stats["folders"] += local_folders
+                                stats["bytes"] += local_bytes
+
+                            offset += len(item_list)
+                            if offset >= total_in_dir or not item_list:
+                                break
+                    finally:
+                        dir_queue.task_done()
 
             try:
-                while queue:
-                    current_cid, current_virtual_path = queue.popleft()
-                    if current_cid in visited_cids:
-                        continue
-                    visited_cids.add(current_cid)
+                workers = [asyncio.create_task(dir_worker(i)) for i in range(settings.CRAWLER_CONCURRENCY)]
+                await dir_queue.join()
+                await asyncio.gather(*workers, return_exceptions=True)
 
-                    offset = 0
-                    limit = settings.CRAWLER_PAGE_SIZE
-
-                    while True:
-                        snap_data = await self._fetch_snap_page(
-                            client, share_code, receive_code or share_obj.receive_code, current_cid, offset, limit
-                        )
-                        payload = snap_data.get("data", {})
-                        if not extracted_title:
-                            share_info = payload.get("share_info", {})
-                            extracted_title = share_info.get("share_title") or payload.get("share_title") or f"115 Share {share_code}"
-                            share_obj.title = extracted_title
-
-                        item_list = payload.get("list", [])
-                        total_in_dir = payload.get("count", len(item_list))
-
-                        for item in item_list:
-                            raw_fid = item.get("fid")
-                            raw_cid = item.get("cid")
-                            item_name = str(item.get("n", "")).strip()
-                            if not item_name:
-                                continue
-
-                            is_dir = raw_fid is None or (raw_cid is not None and not raw_fid)
-                            node_id = str(raw_cid if is_dir else raw_fid)
-                            item_size = int(item.get("s", 0) or 0)
-                            item_sha1 = str(item.get("sha1", "") or "").lower()
-
-                            norm_path = posixpath.normpath(posixpath.join(current_virtual_path, item_name))
-
-                            if is_dir:
-                                extension = ""
-                                total_folders += 1
-                                queue.append((node_id, norm_path))
-                            else:
-                                _, ext = posixpath.splitext(item_name)
-                                extension = ext.lstrip(".").lower()
-                                total_files += 1
-                                total_size += item_size
-
-                            pending_buffer.append({
-                                "share_id": share_obj.id,
-                                "file_115_id": node_id,
-                                "parent_115_id": current_cid,
-                                "name": item_name,
-                                "extension": extension,
-                                "size": item_size,
-                                "is_dir": is_dir,
-                                "sha1": item_sha1,
-                                "full_path": norm_path,
-                            })
-
-                            if len(pending_buffer) >= 500:
-                                await self._bulk_upsert_files(db, pending_buffer)
-                                pending_buffer.clear()
-
-                        offset += len(item_list)
-                        if offset >= total_in_dir or not item_list:
-                            break
-
-                if pending_buffer:
-                    await self._bulk_upsert_files(db, pending_buffer)
-                    pending_buffer.clear()
+                await db_write_queue.put(None)
+                await db_write_queue.join()
+                await db_writer_task
 
                 share_obj.status = ShareStatus.ACTIVE.value
-                share_obj.file_count = total_files
-                share_obj.folder_count = total_folders
-                share_obj.total_size = total_size
+                share_obj.file_count = stats["files"]
+                share_obj.folder_count = stats["folders"]
+                share_obj.total_size = stats["bytes"]
                 share_obj.last_crawled_at = datetime.now(timezone.utc)
                 await db.commit()
                 return share_obj
-
-            except ShareExpiredOrInvalidError:
-                share_obj.status = ShareStatus.EXPIRED.value
-                await db.commit()
-                raise
-            except ShareBannedError:
-                share_obj.status = ShareStatus.BANNED.value
-                await db.commit()
-                raise
             except Exception as exc:
                 await db.rollback()
-                raise ShareCrawlerError(f"Crawl failed: {exc}") from exc
+                raise
 
     async def _bulk_upsert_files(self, db: AsyncSession, records: List[Dict[str, Any]]) -> None:
         if not records:
@@ -672,7 +704,7 @@ class Crawler115Engine:
             }
         )
         await db.execute(upsert)
-        await db.flush()`
+        await db.commit()`
   },
   {
     name: 'worker.py',
@@ -863,7 +895,8 @@ async def search_resources(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
-    base_conditions = [Share.status == ShareStatus.ACTIVE.value, File.is_dir == is_dir]
+    # 支持已完成 (ACTIVE) 及正在爬取中 (PENDING) 的实时检索，过滤失效/封禁链接
+    base_conditions = [Share.status.in_([ShareStatus.ACTIVE.value, ShareStatus.PENDING.value]), File.is_dir == is_dir]
     clean_kw = keyword.strip()
     base_conditions.append(File.full_path.ilike(f"%{clean_kw}%"))
     if extension:

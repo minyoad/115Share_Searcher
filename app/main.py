@@ -151,9 +151,10 @@ async def search_resources(
     通过 PostgreSQL GIN / pg_trgm 全文模糊索引快速检索 115 资源，
     返回文件全路径、分享者信息、直达提取链接与 OpenList/AList 挂载节点 ID。
     """
-    # Base query joined with shares table
+    # Allow searching both fully completed (ACTIVE=1) and currently crawling (PENDING=0) shares
+    # Exclude only EXPIRED (2) and BANNED (3) shares
     base_conditions = [
-        Share.status == ShareStatus.ACTIVE.value,
+        Share.status.in_([ShareStatus.ACTIVE.value, ShareStatus.PENDING.value]),
         File.is_dir == is_dir,
     ]
 
