@@ -553,6 +553,7 @@ async def get_proxy_status():
     proxy_mgr = ProxyManager.get_instance()
     await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
+    await proxy_mgr.load_runtime_state_from_db()
     return proxy_mgr.get_status()
 
 
@@ -587,6 +588,27 @@ async def refresh_proxy_pool():
         "status": "success",
         "message": f"代理池已刷新，当前可用节点总数: {count}",
         "total_proxies": count,
+    }
+
+
+@app.post(
+    "/api/v1/system/proxy/health-check",
+    summary="手动触发对代理池全量节点进行 115 API 防封与健康度轮询探测",
+)
+async def trigger_proxy_health_check():
+    """
+    并发主动测试代理池中所有节点对 115 Snap API 的连通性与 WAF 405 拦截状态，
+    自动隔离已知被封锁的 IP，并将检测指标与状态实时更新持久化至数据库。
+    """
+    proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.sync_from_storage()
+    await proxy_mgr.initialize()
+    result = await proxy_mgr.health_check_all_proxies()
+    return {
+        "status": "success",
+        "message": "全量代理 115 API 健康巡检与数据库状态更新完成",
+        "result": result,
+        "current_status": proxy_mgr.get_status(),
     }
 
 

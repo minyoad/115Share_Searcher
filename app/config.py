@@ -99,6 +99,14 @@ class Settings(BaseSettings):
         default=60.0, 
         description="Seconds to quarantine a proxy that triggered 115 WAF 405"
     )
+    PROXY_HEALTH_CHECK_INTERVAL: int = Field(
+        default=60,
+        description="Interval in seconds for background periodic health check of all proxies in pool against 115 API"
+    )
+    PROXY_HEALTH_CHECK_CONCURRENCY: int = Field(
+        default=5,
+        description="Max concurrent probe requests during background proxy health checks"
+    )
     PROXY_TIMEOUT: float = Field(
         default=12.0, 
         description="Proxy connection timeout in seconds"

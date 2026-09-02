@@ -16,6 +16,7 @@ from app.models import SystemSetting
 logger = logging.getLogger("app.proxy")
 
 CONFIG_KEY_PROXY = "proxy_config"
+CONFIG_KEY_PROXY_RUNTIME = "proxy_runtime_state"
 
 
 @dataclass
@@ -99,6 +100,7 @@ class ProxyManager:
         self.current_index = 0
         self.last_refresh_time: float = 0.0
         self.refresh_task: Optional[asyncio.Task] = None
+        self.health_check_task: Optional[asyncio.Task] = None
         self._current_sticky_proxy: Optional[str] = None
         self._initialized = False
 
@@ -117,7 +119,92 @@ class ProxyManager:
             return f"http://{raw}"
         return raw
 
+    async def sync_runtime_state_to_db(self, force: bool = False):
+        """
+        将当前进程的代理运行状态（当前承载 IP、各节点成功/失败数、延迟、405 封禁）异步保存至 DB，供 Web API 端与其他进程实时感知
+        """
+        now = time.time()
+        if not force and (now - getattr(self, "_last_db_state_sync", 0.0)) < 1.0:
+            return
+
+        self._last_db_state_sync = now
+        try:
+            nodes_dict = {}
+            for url, node in self.pool.items():
+                nodes_dict[url] = {
+                    "success_count": node.success_count,
+                    "failure_count": node.failure_count,
+                    "consecutive_failures": node.consecutive_failures,
+                    "is_banned_405": node.is_banned_405,
+                    "banned_until": node.banned_until,
+                    "last_latency_ms": node.last_latency_ms,
+                    "last_used_at": node.last_used_at,
+                }
+
+            payload = {
+                "current_sticky_proxy": self._current_sticky_proxy,
+                "last_refresh_time": self.last_refresh_time,
+                "nodes": nodes_dict,
+                "updated_at": now,
+            }
+
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == CONFIG_KEY_PROXY_RUNTIME)
+                )
+                setting_obj = result.scalar_one_or_none()
+                if setting_obj is None:
+                    setting_obj = SystemSetting(
+                        key=CONFIG_KEY_PROXY_RUNTIME,
+                        value=json.dumps(payload, ensure_ascii=False)
+                    )
+                    db.add(setting_obj)
+                else:
+                    setting_obj.value = json.dumps(payload, ensure_ascii=False)
+                await db.commit()
+        except Exception as exc:
+            logger.debug(f"[ProxyManager] Sync runtime state to DB failed: {exc}")
+
+    async def load_runtime_state_from_db(self):
+        """
+        从数据库加载最新的运行状态（包括 Worker 正在使用的承载 IP、各节点请求与延迟数）
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == CONFIG_KEY_PROXY_RUNTIME)
+                )
+                setting_obj = result.scalar_one_or_none()
+                if setting_obj and setting_obj.value:
+                    data = json.loads(setting_obj.value)
+
+                    db_sticky = data.get("current_sticky_proxy")
+                    if db_sticky is not None or self.mode == "OFF":
+                        self._current_sticky_proxy = db_sticky if self.mode != "OFF" else None
+
+                    db_refresh = data.get("last_refresh_time")
+                    if db_refresh:
+                        self.last_refresh_time = db_refresh
+
+                    nodes_data = data.get("nodes", {})
+                    for url, node_info in nodes_data.items():
+                        if url not in self.pool:
+                            self.pool[url] = ProxyNode(url=url)
+                        node = self.pool[url]
+                        node.success_count = max(node.success_count, node_info.get("success_count", 0))
+                        node.failure_count = max(node.failure_count, node_info.get("failure_count", 0))
+                        node.consecutive_failures = node_info.get("consecutive_failures", 0)
+                        node.is_banned_405 = node_info.get("is_banned_405", False)
+                        node.banned_until = node_info.get("banned_until", 0.0)
+                        if node_info.get("last_latency_ms", 0) > 0:
+                            node.last_latency_ms = node_info["last_latency_ms"]
+                        if node_info.get("last_used_at", 0) > node.last_used_at:
+                            node.last_used_at = node_info["last_used_at"]
+        except Exception as exc:
+            logger.debug(f"[ProxyManager] Load runtime state from DB failed: {exc}")
+
     async def sync_from_storage(self, force: bool = False) -> bool:
+
         """
         从数据库持久化存储 (system_settings 表) 同步最新的代理配置
         实现跨进程 (API 与 Worker 容器) 实时配置同步以及重启后持久化
@@ -233,10 +320,13 @@ class ProxyManager:
         if self.refresh_task and not self.refresh_task.done():
             self.refresh_task.cancel()
             self.refresh_task = None
+        if self.health_check_task and not self.health_check_task.done():
+            self.health_check_task.cancel()
+            self.health_check_task = None
         await self.initialize()
 
     async def initialize(self):
-        """初始化代理池并启动后台刷新定时任务"""
+        """初始化代理池并启动后台刷新与健康度巡检定时任务"""
         if self._initialized:
             return
         async with self.lock:
@@ -273,6 +363,11 @@ class ProxyManager:
                 if self.refresh_task is None or self.refresh_task.done():
                     self.refresh_task = asyncio.create_task(self._auto_refresh_loop())
 
+            # 启动后台代理健康与 115 WAF 405 防封巡检任务
+            if self.mode != "OFF":
+                if self.health_check_task is None or self.health_check_task.done():
+                    self.health_check_task = asyncio.create_task(self._auto_health_check_loop())
+
     async def _auto_refresh_loop(self):
         """后台定时维护动态代理池 (仅当可用代理不足或长期未更新时温和补充)"""
         while True:
@@ -294,6 +389,106 @@ class ProxyManager:
                 break
             except Exception as exc:
                 logger.error(f"[ProxyManager] Auto-refresh loop error: {exc}")
+
+    async def _auto_health_check_loop(self):
+        """后台定时主动探测代理池内全量 IP 的 115 API 健康状态与 WAF 405 封禁状态"""
+        logger.info(
+            f"[ProxyManager] Started background 115 health check loop "
+            f"(interval={settings.PROXY_HEALTH_CHECK_INTERVAL}s, concurrency={settings.PROXY_HEALTH_CHECK_CONCURRENCY})"
+        )
+        while True:
+            try:
+                await asyncio.sleep(settings.PROXY_HEALTH_CHECK_INTERVAL)
+                if self.mode != "OFF" and self.pool:
+                    logger.info("[ProxyManager] Executing background health check for all proxies in pool...")
+                    await self.health_check_all_proxies()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error(f"[ProxyManager] Error in proxy health check loop: {exc}")
+
+    async def health_check_all_proxies(self) -> Dict[str, Any]:
+        """
+        主动并发测试代理池中所有节点对 115 API 的健康状态，
+        识别并标记 WAF 405 封禁与不可用 IP，并将检测状态实时更新并保存至 PostgreSQL 数据库。
+        """
+        if self.mode == "OFF" or not self.pool:
+            return {"status": "skipped", "reason": "Proxy mode is OFF or pool is empty"}
+
+        proxies = list(self.pool.keys())
+        sem = asyncio.Semaphore(settings.PROXY_HEALTH_CHECK_CONCURRENCY)
+
+        async def _probe(url: str):
+            async with sem:
+                return await self._probe_proxy_node(url)
+
+        results = await asyncio.gather(*[_probe(p) for p in proxies], return_exceptions=True)
+
+        healthy_count = 0
+        banned_405_count = 0
+        failed_count = 0
+
+        for res in results:
+            if isinstance(res, dict):
+                st = res.get("status")
+                if st == "success":
+                    healthy_count += 1
+                elif st == "waf_405_blocked":
+                    banned_405_count += 1
+                else:
+                    failed_count += 1
+
+        # 强制将最新健康与封禁状态同步持久化至 DB
+        await self.sync_runtime_state_to_db(force=True)
+
+        logger.info(
+            f"[ProxyHealthCheck] Completed 115 API health audit for {len(proxies)} proxies: "
+            f"healthy={healthy_count}, 405_banned={banned_405_count}, failed={failed_count}. "
+            f"Updated database state."
+        )
+
+        return {
+            "total_tested": len(proxies),
+            "healthy": healthy_count,
+            "banned_405": banned_405_count,
+            "failed": failed_count,
+            "timestamp": time.time(),
+        }
+
+    async def _probe_proxy_node(self, proxy_url: str) -> Dict[str, Any]:
+        """内部单节点 115 Snap API 健康探测"""
+        start_time = time.time()
+        test_target = "https://webapi.115.com/share/snap"
+        headers = {
+            "User-Agent": settings.CRAWLER_USER_AGENT,
+            "Referer": "https://115.com/",
+            "Accept": "application/json, text/plain, */*",
+        }
+        try:
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                timeout=settings.PROXY_TIMEOUT,
+                verify=False,
+                follow_redirects=True,
+            ) as client:
+                res = await client.get(
+                    test_target,
+                    params={"share_code": "health_probe_check", "receive_code": "0000"},
+                    headers=headers,
+                )
+                latency = (time.time() - start_time) * 1000
+                if res.status_code in (200, 400, 403, 404):
+                    await self.mark_success(proxy_url, latency)
+                    return {"proxy": proxy_url, "status": "success", "latency_ms": latency, "code": res.status_code}
+                elif res.status_code == 405:
+                    await self.mark_failure(proxy_url, is_405=True, reason="115 WAF 405 Blocked")
+                    return {"proxy": proxy_url, "status": "waf_405_blocked", "code": 405}
+                else:
+                    await self.mark_failure(proxy_url, is_405=False, reason=f"HTTP {res.status_code}")
+                    return {"proxy": proxy_url, "status": "http_error", "code": res.status_code}
+        except Exception as exc:
+            await self.mark_failure(proxy_url, is_405=False, reason=str(exc)[:60])
+            return {"proxy": proxy_url, "status": "failed", "error": str(exc)}
 
     async def _fetch_from_api_unlocked(self, force: bool = False) -> int:
         """从配置的代理池 API 拉取 IP 列表 (带请求冷却保护)"""
@@ -399,34 +594,49 @@ class ProxyManager:
             if not available_nodes:
                 logger.warning("[ProxyManager] All proxies in pool are quarantined or failed. Attempting force refresh...")
                 if self.mode == "POOL_API":
-                    await self._fetch_from_api_unlocked()
+                    await self._fetch_from_api_unlocked(force=True)
                     available_nodes = [node for node in self.pool.values() if node.is_available]
 
                 if not available_nodes:
-                    # 如果仍然没有，解封一些非 405 节点
-                    available_nodes = list(self.pool.values())
+                    # 允许对仅因普通网络超时而暂失的节点进行充能，但【严格剔除】被 115 WAF 405 封禁的 IP！
+                    available_nodes = [node for node in self.pool.values() if not node.is_banned_405]
+
+                if not available_nodes:
+                    logger.warning(
+                        "[ProxyManager] All proxies in pool are blocked by 115 WAF (405). "
+                        "Preventing crawler from attempting to use known-blocked IPs. Falling back to DIRECT (None)."
+                    )
+                    return None
 
             strategy = settings.PROXY_ROTATION_STRATEGY
 
             if strategy == "rotate_per_request" or force_rotate:
                 chosen = random.choice(available_nodes)
+                chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
+                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
             elif strategy == "round_robin":
                 self.current_index = (self.current_index + 1) % len(available_nodes)
                 chosen = available_nodes[self.current_index]
+                chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
+                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
             else:  # rotate_on_error / sticky
                 if self._current_sticky_proxy and self._current_sticky_proxy in self.pool:
                     sticky_node = self.pool[self._current_sticky_proxy]
                     if sticky_node.is_available and not force_rotate:
+                        sticky_node.last_used_at = time.time()
+                        asyncio.create_task(self.sync_runtime_state_to_db())
                         return self._current_sticky_proxy
 
                 chosen = random.choice(available_nodes)
+                chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
+                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
     async def mark_success(self, proxy_url: Optional[str], latency_ms: float = 0.0):
@@ -435,6 +645,7 @@ class ProxyManager:
         async with self.lock:
             if proxy_url in self.pool:
                 self.pool[proxy_url].mark_success(latency_ms)
+                asyncio.create_task(self.sync_runtime_state_to_db())
 
     async def mark_failure(self, proxy_url: Optional[str], is_405: bool = False, reason: str = ""):
         if not proxy_url:
@@ -445,6 +656,7 @@ class ProxyManager:
                 # 如果当前 sticky 代理失败，清空 sticky 促使下次换新 IP
                 if self._current_sticky_proxy == proxy_url:
                     self._current_sticky_proxy = None
+                asyncio.create_task(self.sync_runtime_state_to_db())
 
     async def test_proxy(self, proxy_url: Optional[str] = None) -> Dict[str, Any]:
         """测试指定代理或当前可用代理对 115 的连通性"""
@@ -520,8 +732,9 @@ class ProxyManager:
         total_success = sum(p.success_count for p in self.pool.values())
         total_failures = sum(p.failure_count for p in self.pool.values())
 
-        # 示例展示前 8 个节点
-        nodes_summary = [node.to_dict() for node in list(self.pool.values())[:8]]
+        # 按最近使用时间倒序排列，优先把近期活跃/接管的节点排在前面
+        sorted_nodes = sorted(self.pool.values(), key=lambda n: n.last_used_at, reverse=True)
+        nodes_summary = [node.to_dict() for node in sorted_nodes[:12]]
 
         return {
             "mode": self.mode,
@@ -535,7 +748,7 @@ class ProxyManager:
             "failed_count": failed,
             "total_success_requests": total_success,
             "total_failed_requests": total_failures,
-            "current_sticky_proxy": self._current_sticky_proxy,
+            "current_sticky_proxy": self._current_sticky_proxy if self.mode != "OFF" else None,
             "last_refresh_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_refresh_time)) if self.last_refresh_time else None,
             "refresh_interval_sec": settings.PROXY_POOL_REFRESH_INTERVAL,
             "api_endpoint": settings.PROXY_POOL_API if self.mode == "POOL_API" else None,

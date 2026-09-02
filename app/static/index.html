@@ -767,6 +767,13 @@
 
         <div class="flex items-center gap-3 self-start md:self-auto">
           <button
+            @click="triggerHealthCheck()"
+            :disabled="healthChecking"
+            class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl transition flex items-center gap-2 shadow-sm disabled:opacity-50"
+          >
+            <span>{{ healthChecking ? '巡检中...' : '🏥 115防封健康巡检' }}</span>
+          </button>
+          <button
             @click="refreshProxyPool()"
             :disabled="proxyLoading"
             class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition flex items-center gap-2 shadow-sm disabled:opacity-50"
@@ -818,10 +825,15 @@
 
         <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
           <div class="text-xs font-medium text-slate-500 mb-1">当前承载代理</div>
-          <div class="text-xs font-mono font-semibold text-slate-800 truncate" :title="proxyStatus.current_sticky_proxy || '直连'">
+          <div class="text-xs font-mono font-semibold text-slate-800 truncate" :title="proxyStatus.current_sticky_proxy || '直连 (DIRECT)'">
             {{ proxyStatus.current_sticky_proxy ? proxyStatus.current_sticky_proxy.replace(/https?:\/\//, '') : '直连 (DIRECT)' }}
           </div>
-          <div class="text-xs text-slate-400 mt-1">Sticky IP</div>
+          <div class="text-xs text-slate-400 mt-1">
+            {{ proxyStatus.mode === 'OFF' ? '直连无代理' : 
+               proxyStatus.rotation_strategy === 'rotate_on_error' ? '粘性复用 (Sticky IP)' : 
+               proxyStatus.rotation_strategy === 'rotate_per_request' ? '逐次轮换 (Per Request)' : 
+               proxyStatus.rotation_strategy === 'round_robin' ? '顺序轮询 (Round Robin)' : 'Active IP' }}
+          </div>
         </div>
       </div>
 
@@ -1226,6 +1238,25 @@
           }
         };
 
+        const healthChecking = ref(false);
+
+        const triggerHealthCheck = async () => {
+          healthChecking.value = true;
+          try {
+            const res = await fetch('/api/v1/system/proxy/health-check', { method: 'POST' });
+            if (res.ok) {
+              const data = await res.json();
+              const r = data.result || {};
+              showToast(`健康巡检完成: 健康 ${r.healthy || 0} 个, 405 封禁 ${r.banned_405 || 0} 个, 失败 ${r.failed || 0} 个`);
+            }
+            await fetchProxyStatus();
+          } catch (err) {
+            showToast('健康巡检失败: ' + err.message);
+          } finally {
+            healthChecking.value = false;
+          }
+        };
+
         const refreshProxyPool = async () => {
           proxyLoading.value = true;
           try {
@@ -1544,12 +1575,15 @@
         onMounted(() => {
           loadShares(1);
           fetchProxyStatus();
-          // Auto poll if on tasks tab or if pending tasks exist
+          // Auto poll if on tasks/proxy tab or if pending tasks exist
           pollTimer = setInterval(() => {
             if (activeTab.value === 'tasks' || (sharesStats.value && sharesStats.value.pending_shares > 0)) {
               loadShares(sharesPage.value);
             }
-          }, 4000);
+            if (activeTab.value === 'proxy') {
+              fetchProxyStatus();
+            }
+          }, 3000);
         });
 
         onUnmounted(() => {
@@ -1594,6 +1628,8 @@
           proxyTestResult,
           proxySaveSuccess,
           proxyForm,
+          healthChecking,
+          triggerHealthCheck,
           fetchProxyStatus,
           testProxy,
           refreshProxyPool,
