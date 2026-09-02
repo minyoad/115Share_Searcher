@@ -500,11 +500,11 @@ class Crawler115Engine:
                         if offset >= total_in_dir or not item_list:
                             break
 
-                    except Exception as exc:
-                        logger.error(f"[Worker-{worker_id}] Error traversing cid={current_cid}: {exc}")
-                        raise
-                    finally:
-                        dir_queue.task_done()
+                except Exception as exc:
+                    logger.error(f"[Worker-{worker_id}] Error traversing cid={current_cid}: {exc}")
+                    raise
+                finally:
+                    dir_queue.task_done()
 
             try:
                 concurrency = max(1, settings.CRAWLER_CONCURRENCY)
