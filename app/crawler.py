@@ -33,14 +33,14 @@ class ShareBannedError(ShareCrawlerError):
 
 class Crawler115Engine:
     """
-    115 分享快照递归爬虫引擎 (自适应多端点 + 浏览器级原生请求)
+    115 分享快照递归爬虫引擎
+    针对 115 官方 share/snap 接口规范：
+    - API: https://webapi.115.com/share/snap
+    - 请求方式: POST (通过 application/x-www-form-urlencoded 传参) 或 GET (自动降级)
+    - 携带标准浏览器头与 Cookie
     """
 
-    # 115 快照 API 备用端点列表（自动故障转移）
-    SNAP_ENDPOINTS = [
-        "https://webapi.115.com/share/snap",
-        "https://anxia.115.com/web/share/snap",
-    ]
+    SNAP_URL = "https://webapi.115.com/share/snap"
 
     def __init__(
         self,
@@ -56,13 +56,16 @@ class Crawler115Engine:
         referer = (
             f"https://115.com/s/{share_code}?password={receive_code}"
             if share_code
-            else settings.CRAWLER_REFERER
+            else "https://115.com/"
         )
         headers = {
             "User-Agent": self.user_agent,
             "Referer": referer,
-            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://115.com",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Connection": "keep-alive",
             "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
             "sec-ch-ua-mobile": "?0",
@@ -85,9 +88,11 @@ class Crawler115Engine:
         limit: int = 100,
     ) -> Dict[str, Any]:
         """
-        请求 115 目录快照，支持多端点自适应尝试
+        请求 115 目录快照。
+        115 webapi.115.com/share/snap 官方 Web 核心端点要求 POST (表单传参)。
+        若遇到异常支持自动在 POST 与 GET 之间自适应切换。
         """
-        params = {
+        data_payload = {
             "share_code": share_code,
             "receive_code": receive_code,
             "cid": str(cid),
@@ -99,61 +104,76 @@ class Crawler115Engine:
 
         retries = 0
         backoff = 0.8
+        current_method = "POST"  # 默认 POST 表单方式
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
-            for url in self.SNAP_ENDPOINTS:
-                try:
-                    delay = random.uniform(settings.CRAWLER_RATE_MIN, settings.CRAWLER_RATE_MAX)
-                    await asyncio.sleep(delay)
+            try:
+                delay = random.uniform(settings.CRAWLER_RATE_MIN, settings.CRAWLER_RATE_MAX)
+                await asyncio.sleep(delay)
 
-                    headers = self._get_headers(share_code, receive_code)
-                    response = await client.get(
-                        url,
-                        params=params,
+                headers = self._get_headers(share_code, receive_code)
+
+                if current_method == "POST":
+                    response = await client.post(
+                        self.SNAP_URL,
+                        data=data_payload,
                         headers=headers,
                         timeout=self.timeout,
                     )
+                else:
+                    # GET 降级时去掉 POST 专用的 Content-Type 头
+                    get_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+                    response = await client.get(
+                        self.SNAP_URL,
+                        params=data_payload,
+                        headers=get_headers,
+                        timeout=self.timeout,
+                    )
 
-                    if response.status_code == 405:
-                        logger.warning(
-                            f"Endpoint {url} returned 405 for share_code={share_code}, trying next endpoint..."
-                        )
-                        continue
-
-                    if response.status_code != 200:
-                        logger.warning(
-                            f"HTTP {response.status_code} from {url} for share_code={share_code}, cid={cid}. "
-                            f"Retrying in {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
-                        )
-                        continue
-
-                    result = response.json()
-
-                    # 业务状态码判断
-                    if not result.get("state", False):
-                        msg = str(result.get("msg") or result.get("error", "Unknown 115 error"))
-                        error_code = result.get("errNo") or result.get("code")
-
-                        if any(x in msg for x in ["已失效", "不存在", "取消", "提取码错误", "不存在或已删除"]):
-                            raise ShareExpiredOrInvalidError(f"Share expired or password invalid: {msg}")
-                        if any(x in msg for x in ["违规", "屏蔽", "封禁", "安全"]):
-                            raise ShareBannedError(f"Share banned: {msg}")
-
-                        logger.warning(f"115 state=false: msg='{msg}', code={error_code}. Retrying...")
-                        retries += 1
-                        await asyncio.sleep(backoff)
-                        backoff *= 1.8
-                        break
-
-                    return result
-
-                except (httpx.RequestError, httpx.TimeoutException) as exc:
-                    logger.warning(f"Network error on {url}: {exc}")
+                if response.status_code == 405:
+                    logger.warning(
+                        f"115 API returned 405 for {current_method} share_code={share_code}, cid={cid}. Switching method."
+                    )
+                    current_method = "GET" if current_method == "POST" else "POST"
+                    retries += 1
+                    await asyncio.sleep(0.5)
                     continue
 
-            retries += 1
-            await asyncio.sleep(backoff)
-            backoff *= 1.8
+                if response.status_code != 200:
+                    logger.warning(
+                        f"HTTP {response.status_code} for share_code={share_code}, cid={cid}. "
+                        f"Retrying in {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
+                    )
+                    retries += 1
+                    await asyncio.sleep(backoff)
+                    backoff *= 1.8
+                    continue
+
+                result = response.json()
+
+                # 业务状态码判断
+                if not result.get("state", False):
+                    msg = str(result.get("msg") or result.get("error", "Unknown 115 error"))
+                    error_code = result.get("errNo") or result.get("code")
+
+                    if any(x in msg for x in ["已失效", "不存在", "取消", "提取码错误", "不存在或已删除"]):
+                        raise ShareExpiredOrInvalidError(f"Share expired or password invalid: {msg}")
+                    if any(x in msg for x in ["违规", "屏蔽", "封禁", "安全"]):
+                        raise ShareBannedError(f"Share banned: {msg}")
+
+                    logger.warning(f"115 state=false: msg='{msg}', code={error_code}. Retrying...")
+                    retries += 1
+                    await asyncio.sleep(backoff)
+                    backoff *= 1.8
+                    continue
+
+                return result
+
+            except (httpx.RequestError, httpx.TimeoutException) as exc:
+                logger.warning(f"Network error on {self.SNAP_URL}: {exc}")
+                retries += 1
+                await asyncio.sleep(backoff)
+                backoff *= 1.8
 
         raise ShareCrawlerError(
             f"Failed to fetch snap for share_code={share_code}, cid={cid} after {retries} retries"
