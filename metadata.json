@@ -1,0 +1,6 @@
+{
+  "name": "115 Share Search Service",
+  "description": "基于 FastAPI + PostgreSQL + Redis + 115 Snap API 的生产级 115 网盘分享资源递归爬取、全文检索与索引服务系统",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

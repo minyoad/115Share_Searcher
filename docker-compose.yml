@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  # PostgreSQL Database with pg_trgm extension
+  postgres:
+    image: postgres:15-alpine
+    container_name: 115_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-db_115share}
+      TZ: Asia/Shanghai
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db_115share"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for task queue & caching
+  redis:
+    image: redis:7-alpine
+    container_name: 115_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI REST Web Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 115_api
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CRAWLER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36
+      - CRAWLER_COOKIE=${CRAWLER_COOKIE:-}
+      - CRAWLER_RATE_MIN=0.3
+      - CRAWLER_RATE_MAX=0.8
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Background Crawler Worker (ARQ / Task Consumer)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 115_worker
+    restart: unless-stopped
+    command: python -m app.worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CRAWLER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36
+      - CRAWLER_COOKIE=${CRAWLER_COOKIE:-}
+      - CRAWLER_RATE_MIN=0.3
+      - CRAWLER_RATE_MAX=0.8
+      - CONCURRENCY=4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local

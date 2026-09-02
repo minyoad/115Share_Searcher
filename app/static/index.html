@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>115 分享资源搜索引擎 | 115 Share Search</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; }
+    [v-cloak] { display: none; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+  <div id="app" v-cloak class="max-w-6xl mx-auto px-4 py-8">
+    
+    <!-- Top Navigation Header -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between pb-6 mb-8 border-b border-slate-200 gap-4">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-xl shadow-sm">
+          115
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-slate-900">115 分享资源搜索服务</h1>
+          <p class="text-xs text-slate-500">毫秒级全文检索 · 树形层级索引 · 挂载 CID 映射</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-3">
+        <button 
+          @click="activeTab = 'search'"
+          :class="activeTab === 'search' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
+          class="px-4 py-2 rounded-lg text-sm font-medium transition"
+        >
+          🔍 资源搜索
+        </button>
+        <button 
+          @click="activeTab = 'import'"
+          :class="activeTab === 'import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
+          class="px-4 py-2 rounded-lg text-sm font-medium transition"
+        >
+          ➕ 提交链接
+        </button>
+        <a 
+          href="/docs" 
+          target="_blank"
+          class="px-4 py-2 rounded-lg text-sm font-medium bg-white text-slate-700 hover:bg-slate-100 transition border border-slate-200"
+        >
+          📖 API 文档
+        </a>
+      </div>
+    </header>
+
+    <!-- TAB 1: Search View -->
+    <main v-if="activeTab === 'search'">
+      <!-- Search Bar & Filters -->
+      <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 mb-6">
+        <form @submit.prevent="doSearch(1)" class="space-y-4">
+          <div class="flex flex-col md:flex-row gap-3">
+            <div class="relative flex-1">
+              <input 
+                v-model="query.keyword" 
+                type="text" 
+                placeholder="输入资源名称、全路径关键词 (例如：4K, 流浪地球, 考研, 电子书)..."
+                required
+                class="w-full pl-4 pr-10 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-800 text-base"
+              />
+              <button 
+                v-if="query.keyword" 
+                type="button" 
+                @click="query.keyword = ''; results = []"
+                class="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+            <button 
+              type="submit"
+              :disabled="loading"
+              class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition flex items-center justify-center space-x-2 shadow-sm disabled:opacity-50"
+            >
+              <span v-if="loading">搜索中...</span>
+              <span v-else>立即检索</span>
+            </button>
+          </div>
+
+          <!-- Filter Pills -->
+          <div class="flex flex-wrap items-center gap-2 pt-2 text-sm text-slate-600">
+            <span class="text-xs font-semibold uppercase text-slate-400 mr-1">类型筛选:</span>
+            <button 
+              v-for="ext in quickExts" 
+              :key="ext"
+              type="button"
+              @click="toggleExt(ext)"
+              :class="query.extension === ext ? 'bg-blue-100 text-blue-700 border-blue-300 font-medium' : 'bg-slate-100 text-slate-600 border-transparent hover:bg-slate-200'"
+              class="px-3 py-1 rounded-full border text-xs transition"
+            >
+              .{{ ext }}
+            </button>
+            <button 
+              type="button"
+              @click="query.extension = ''"
+              v-if="query.extension"
+              class="text-xs text-blue-600 hover:underline ml-2"
+            >
+              清除后缀
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Results Stats & List -->
+      <div v-if="results.length > 0">
+        <div class="flex items-center justify-between mb-4 px-1 text-sm text-slate-500">
+          <span>共找到 <strong class="text-slate-800">{{ totalCount }}</strong> 条匹配文件 (第 {{ page }}/{{ totalPages }} 页)</span>
+        </div>
+
+        <div class="space-y-3">
+          <div 
+            v-for="item in results" 
+            :key="item.id"
+            class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-blue-300 transition"
+          >
+            <div class="flex items-start justify-between gap-4">
+              <div class="space-y-1.5 flex-1 min-w-0">
+                <div class="flex items-center space-x-2">
+                  <span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700 uppercase">
+                    {{ item.extension || 'FILE' }}
+                  </span>
+                  <h3 class="text-base font-semibold text-slate-900 truncate" :title="item.name">
+                    {{ item.name }}
+                  </h3>
+                </div>
+
+                <div class="text-xs text-slate-500 truncate flex items-center space-x-1" :title="item.full_path">
+                  <span>📂 路径:</span>
+                  <span class="font-mono text-slate-600">{{ item.full_path }}</span>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-1">
+                  <span>📦 大小: <strong class="text-slate-700">{{ item.formatted_size }}</strong></span>
+                  <span v-if="item.sha1">🔑 SHA1: <span class="font-mono text-slate-600">{{ item.sha1.substring(0, 10) }}...</span></span>
+                  <span>📁 所属分享: <span class="text-slate-700 font-medium">{{ item.share_title }}</span></span>
+                  <span v-if="item.receive_code">🔒 提取码: <code class="bg-amber-50 text-amber-700 px-1 py-0.5 rounded font-mono">{{ item.receive_code }}</code></span>
+                </div>
+              </div>
+
+              <!-- Actions -->
+              <div class="flex flex-col items-end gap-2 shrink-0">
+                <a 
+                  :href="item.share_url" 
+                  target="_blank"
+                  class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+                >
+                  直达 115 分享 ↗
+                </a>
+                <button 
+                  @click="copyText(item.openlist_mount_cid, 'AList/OpenList 挂载 CID 已复制')"
+                  class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs rounded transition"
+                  title="复制节点 FID/CID 用于 AList 或 OpenList 挂载"
+                >
+                  复制节点 ID
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pagination -->
+        <div v-if="totalPages > 1" class="flex justify-center items-center gap-2 mt-8">
+          <button 
+            @click="doSearch(page - 1)" 
+            :disabled="page <= 1"
+            class="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+          >
+            上一页
+          </button>
+          <span class="text-sm text-slate-600 px-2">第 {{ page }} / {{ totalPages }} 页</span>
+          <button 
+            @click="doSearch(page + 1)" 
+            :disabled="page >= totalPages"
+            class="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+
+      <!-- Empty / Initial State -->
+      <div v-else-if="searched" class="text-center py-16 bg-white rounded-2xl border border-slate-200 text-slate-500">
+        <p class="text-lg font-medium text-slate-700">未找到匹配的文件资源</p>
+        <p class="text-sm mt-1">您可以尝试更换关键词或提交新的 115 分享链接。</p>
+      </div>
+    </main>
+
+    <!-- TAB 2: Batch Import View -->
+    <section v-if="activeTab === 'import'" class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+      <h2 class="text-lg font-bold text-slate-900 mb-2">批量提交 115 分享链接</h2>
+      <p class="text-sm text-slate-500 mb-4">
+        支持粘贴 115 分享链接 (如 <code>https://115.com/s/sw3xxxx?password=yyyy</code> 或 <code>sw3xxxx#yyyy</code>)，系统将自动解析并在后台 BFS 递归抓取全部文件树。
+      </p>
+
+      <form @submit.prevent="submitBatchImport" class="space-y-4">
+        <textarea 
+          v-model="importText"
+          rows="6"
+          placeholder="每行一个 115 分享链接或代码，例如：&#10;https://115.com/s/sw31a2b3c?password=abcd&#10;https://115.com/s/sw39x8y7z&#10;sw3556677#1234"
+          required
+          class="w-full p-4 rounded-xl border border-slate-300 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        ></textarea>
+
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-slate-400">已识别 {{ parsedImportCount }} 条有效链接</span>
+          <button 
+            type="submit"
+            :disabled="importLoading"
+            class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition shadow-sm disabled:opacity-50"
+          >
+            <span v-if="importLoading">提交中...</span>
+            <span v-else>推入抓取队列 🚀</span>
+          </button>
+        </div>
+      </form>
+
+      <div v-if="importResult" class="mt-6 p-4 rounded-xl bg-green-50 border border-green-200 text-green-800 text-sm">
+        <p class="font-bold">✅ {{ importResult.message }}</p>
+        <p class="text-xs text-green-700 mt-1">
+          提交总数: {{ importResult.total_submitted }} | 队列任务数: {{ importResult.tasks_queued }} | 已收录跳过: {{ importResult.ignored_duplicates }}
+        </p>
+      </div>
+    </section>
+
+    <!-- Toast Notification -->
+    <div 
+      v-if="toastMessage" 
+      class="fixed bottom-6 right-6 bg-slate-900 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg transition"
+    >
+      {{ toastMessage }}
+    </div>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+      setup() {
+        const activeTab = ref('search');
+        const query = ref({ keyword: '', extension: '' });
+        const quickExts = ['mkv', 'mp4', 'pdf', 'zip', 'iso', 'flac', 'epub'];
+        
+        const loading = ref(false);
+        const searched = ref(false);
+        const results = ref([]);
+        const totalCount = ref(0);
+        const page = ref(1);
+        const totalPages = ref(0);
+        const pageSize = 20;
+
+        const importText = ref('');
+        const importLoading = ref(false);
+        const importResult = ref(null);
+        const toastMessage = ref('');
+
+        const showToast = (msg) => {
+          toastMessage.value = msg;
+          setTimeout(() => { toastMessage.value = ''; }, 2500);
+        };
+
+        const copyText = (txt, msg) => {
+          navigator.clipboard.writeText(txt);
+          showToast(msg || '已复制到剪贴板');
+        };
+
+        const toggleExt = (ext) => {
+          query.value.extension = query.value.extension === ext ? '' : ext;
+          if (query.value.keyword) doSearch(1);
+        };
+
+        const doSearch = async (targetPage = 1) => {
+          if (!query.value.keyword.trim()) return;
+          loading.value = true;
+          page.value = targetPage;
+          
+          try {
+            const params = new URLSearchParams({
+              keyword: query.value.keyword.trim(),
+              page: targetPage.toString(),
+              page_size: pageSize.toString()
+            });
+            if (query.value.extension) params.append('extension', query.value.extension);
+
+            const res = await fetch(`/api/v1/search?${params.toString()}`);
+            if (!res.ok) throw new Error('Search request failed');
+            const data = await res.json();
+            
+            results.value = data.items;
+            totalCount.value = data.total;
+            totalPages.value = data.total_pages;
+            searched.value = true;
+          } catch (err) {
+            showToast('搜索发生异常: ' + err.message);
+          } finally {
+            loading.value = false;
+          }
+        };
+
+        const parsedImportCount = computed(() => {
+          return importText.value.split('\n').filter(line => line.trim().length > 0).length;
+        });
+
+        const submitBatchImport = async () => {
+          const lines = importText.value.split('\n').map(l => l.trim()).filter(Boolean);
+          if (lines.length === 0) return;
+
+          importLoading.value = true;
+          importResult.value = null;
+
+          try {
+            const items = lines.map(line => ({ raw_url: line }));
+            const res = await fetch('/api/v1/shares/batch-import', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shares: items })
+            });
+
+            if (!res.ok) throw new Error('Import request failed');
+            const data = await res.json();
+            importResult.value = data;
+            importText.value = '';
+            showToast('已推入后台抓取队列！');
+          } catch (err) {
+            showToast('提交失败: ' + err.message);
+          } finally {
+            importLoading.value = false;
+          }
+        };
+
+        return {
+          activeTab,
+          query,
+          quickExts,
+          loading,
+          searched,
+          results,
+          totalCount,
+          page,
+          totalPages,
+          importText,
+          parsedImportCount,
+          importLoading,
+          importResult,
+          toastMessage,
+          doSearch,
+          toggleExt,
+          copyText,
+          submitBatchImport,
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
