@@ -80,8 +80,16 @@ class Settings(BaseSettings):
         description="Rotation strategy: 'rotate_on_error', 'rotate_per_request', 'round_robin'"
     )
     PROXY_POOL_REFRESH_INTERVAL: int = Field(
-        default=45, 
-        description="Interval in seconds to auto-refresh proxy pool from API"
+        default=600, 
+        description="Interval in seconds to auto-refresh proxy pool from API (e.g. 600s = 10 mins)"
+    )
+    PROXY_POOL_MIN_AVAILABLE_THRESHOLD: int = Field(
+        default=3,
+        description="Minimum number of healthy available proxies; if available count drops below this, fetch from API on demand"
+    )
+    PROXY_POOL_FETCH_COOLDOWN: float = Field(
+        default=15.0,
+        description="Minimum interval in seconds between consecutive API fetches to prevent hitting provider rate limits"
     )
     PROXY_MAX_CONSECUTIVE_FAILURES: int = Field(
         default=3, 

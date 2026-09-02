@@ -45,8 +45,9 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for DB schema init and clean teardown"""
     logger.info("Application starting up... Initializing DB...")
     await init_db()
-    # Initialize Proxy Subsystem
+    # Initialize Proxy Subsystem with DB Persistence
     proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
     yield
     logger.info("Application shutting down...")
@@ -550,6 +551,7 @@ async def get_proxy_status():
     获取代理池当前工作模式、节点总数、可用数、405封禁隔离数、成功/失败指标及样例节点
     """
     proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
     return proxy_mgr.get_status()
 
@@ -563,6 +565,7 @@ async def test_proxy_connectivity(payload: Optional[ProxyTestRequest] = None):
     向 115 端点发起探测请求，评估延迟、HTTP状态码及是否被 115 WAF 405 拦截
     """
     proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
     test_target = payload.proxy_url if payload else None
     return await proxy_mgr.test_proxy(test_target)
@@ -577,8 +580,9 @@ async def refresh_proxy_pool():
     强制立即从配置的代理池 API 拉取最新 IP 节点
     """
     proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
-    count = await proxy_mgr.refresh_pool()
+    count = await proxy_mgr.refresh_pool(force=True)
     return {
         "status": "success",
         "message": f"代理池已刷新，当前可用节点总数: {count}",
@@ -592,38 +596,29 @@ async def refresh_proxy_pool():
 )
 async def update_proxy_config(payload: ProxyConfigUpdateRequest):
     """
-    动态修改代理模式 (OFF, STATIC, POOL_API, CUSTOM_LIST) 与 API 地址，无需重启服务
+    动态修改代理模式 (OFF, STATIC, POOL_API, CUSTOM_LIST) 与 API 地址，持久化至数据库，跨容器与重启均不丢失
     """
     proxy_mgr = ProxyManager.get_instance()
 
+    config_dict = {}
     if payload.mode is not None:
-        settings.PROXY_MODE = payload.mode.upper()
-        proxy_mgr.mode = settings.PROXY_MODE
-
+        config_dict["mode"] = payload.mode
     if payload.proxy_url is not None:
-        settings.PROXY_URL = payload.proxy_url
-
+        config_dict["proxy_url"] = payload.proxy_url
     if payload.proxy_pool_api is not None:
-        settings.PROXY_POOL_API = payload.proxy_pool_api
-
+        config_dict["proxy_pool_api"] = payload.proxy_pool_api
     if payload.proxy_pool_list is not None:
-        settings.PROXY_POOL_LIST = payload.proxy_pool_list
-
+        config_dict["proxy_pool_list"] = payload.proxy_pool_list
     if payload.rotation_strategy is not None:
-        settings.PROXY_ROTATION_STRATEGY = payload.rotation_strategy
-
+        config_dict["rotation_strategy"] = payload.rotation_strategy
     if payload.refresh_interval is not None:
-        settings.PROXY_POOL_REFRESH_INTERVAL = payload.refresh_interval
+        config_dict["refresh_interval"] = payload.refresh_interval
 
-    # 重新初始化代理管理器
-    proxy_mgr._initialized = False
-    proxy_mgr.pool.clear()
-    proxy_mgr._current_sticky_proxy = None
-    await proxy_mgr.initialize()
+    await proxy_mgr.save_config(config_dict)
 
     return {
         "status": "success",
-        "message": "代理配置已热更新并生效",
+        "message": "代理配置已保存到数据库并实时生效（跨容器与重启均自动保持）",
         "current_status": proxy_mgr.get_status(),
     }
 

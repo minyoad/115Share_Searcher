@@ -18,6 +18,7 @@ from app.crawler import (
 )
 from app.database import AsyncSessionLocal, init_db
 from app.models import Share, ShareStatus
+from app.proxy import ProxyManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -212,6 +213,11 @@ async def main() -> None:
     """
     logger.info("Initializing database connection...")
     await init_db()
+
+    # Initialize and sync Proxy Subsystem in worker process
+    proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.sync_from_storage()
+    await proxy_mgr.initialize()
 
     stop_event = asyncio.Event()
 

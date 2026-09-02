@@ -102,3 +102,22 @@ class File(Base):
 
     def __repr__(self) -> str:
         return f"<File(id={self.id}, name='{self.name}', is_dir={self.is_dir}, size={self.size})>"
+
+
+class SystemSetting(Base):
+    """
+    系统持久化配置表 (持久化代理配置、调度策略等，重启不丢失且跨进程自动同步)
+    """
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<SystemSetting(key='{self.key}', updated_at={self.updated_at})>"

@@ -401,6 +401,7 @@ class Crawler115Engine:
         )
 
         proxy_mgr = ProxyManager.get_instance()
+        await proxy_mgr.sync_from_storage()
         await proxy_mgr.initialize()
 
         http_limits = httpx.Limits(

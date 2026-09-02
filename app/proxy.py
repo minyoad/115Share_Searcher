@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import random
 import time
@@ -6,10 +7,15 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
+from sqlalchemy import select
 
 from app.config import settings
+from app.database import AsyncSessionLocal
+from app.models import SystemSetting
 
 logger = logging.getLogger("app.proxy")
+
+CONFIG_KEY_PROXY = "proxy_config"
 
 
 @dataclass
@@ -111,6 +117,124 @@ class ProxyManager:
             return f"http://{raw}"
         return raw
 
+    async def sync_from_storage(self, force: bool = False) -> bool:
+        """
+        从数据库持久化存储 (system_settings 表) 同步最新的代理配置
+        实现跨进程 (API 与 Worker 容器) 实时配置同步以及重启后持久化
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == CONFIG_KEY_PROXY)
+                )
+                setting_obj = result.scalar_one_or_none()
+                if setting_obj and setting_obj.value:
+                    data = json.loads(setting_obj.value)
+                    
+                    changed = False
+                    new_mode = str(data.get("mode") or settings.PROXY_MODE).upper()
+                    new_proxy_url = str(data.get("proxy_url") or "")
+                    new_pool_api = str(data.get("proxy_pool_api") or "")
+                    new_pool_list = str(data.get("proxy_pool_list") or "")
+                    new_strategy = str(data.get("rotation_strategy") or settings.PROXY_ROTATION_STRATEGY)
+                    new_interval = int(data.get("refresh_interval") or settings.PROXY_POOL_REFRESH_INTERVAL)
+
+                    if (
+                        new_mode != settings.PROXY_MODE
+                        or new_proxy_url != settings.PROXY_URL
+                        or new_pool_api != settings.PROXY_POOL_API
+                        or new_pool_list != settings.PROXY_POOL_LIST
+                        or new_strategy != settings.PROXY_ROTATION_STRATEGY
+                        or new_interval != settings.PROXY_POOL_REFRESH_INTERVAL
+                    ):
+                        changed = True
+
+                    settings.PROXY_MODE = new_mode
+                    settings.PROXY_URL = new_proxy_url
+                    settings.PROXY_POOL_API = new_pool_api
+                    settings.PROXY_POOL_LIST = new_pool_list
+                    settings.PROXY_ROTATION_STRATEGY = new_strategy
+                    settings.PROXY_POOL_REFRESH_INTERVAL = new_interval
+                    self.mode = new_mode
+
+                    if changed or force or not self._initialized:
+                        logger.info(
+                            f"[ProxyManager] Applied persistent proxy config from DB: "
+                            f"mode={self.mode}, strategy={settings.PROXY_ROTATION_STRATEGY}, "
+                            f"api={settings.PROXY_POOL_API[:30] if settings.PROXY_POOL_API else 'none'}"
+                        )
+                        self._initialized = False
+                        self.pool.clear()
+                        self._current_sticky_proxy = None
+                        await self.initialize()
+                        return True
+        except Exception as exc:
+            logger.warning(f"[ProxyManager] Failed to sync proxy config from DB: {exc}")
+        return False
+
+    async def save_config(self, config_data: Dict[str, Any]):
+        """
+        保存代理配置到数据库 (跨容器持久化)，并即刻热更新当前进程
+        """
+        # 1. 提取或回退
+        mode = config_data.get("mode")
+        if mode is not None:
+            settings.PROXY_MODE = str(mode).upper()
+            self.mode = settings.PROXY_MODE
+
+        if config_data.get("proxy_url") is not None:
+            settings.PROXY_URL = str(config_data["proxy_url"]).strip()
+
+        if config_data.get("proxy_pool_api") is not None:
+            settings.PROXY_POOL_API = str(config_data["proxy_pool_api"]).strip()
+
+        if config_data.get("proxy_pool_list") is not None:
+            settings.PROXY_POOL_LIST = str(config_data["proxy_pool_list"]).strip()
+
+        if config_data.get("rotation_strategy") is not None:
+            settings.PROXY_ROTATION_STRATEGY = str(config_data["rotation_strategy"]).strip()
+
+        if config_data.get("refresh_interval") is not None:
+            settings.PROXY_POOL_REFRESH_INTERVAL = int(config_data["refresh_interval"])
+
+        # 2. 持久化到 PostgreSQL
+        save_payload = {
+            "mode": settings.PROXY_MODE,
+            "proxy_url": settings.PROXY_URL,
+            "proxy_pool_api": settings.PROXY_POOL_API,
+            "proxy_pool_list": settings.PROXY_POOL_LIST,
+            "rotation_strategy": settings.PROXY_ROTATION_STRATEGY,
+            "refresh_interval": settings.PROXY_POOL_REFRESH_INTERVAL,
+        }
+
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == CONFIG_KEY_PROXY)
+                )
+                setting_obj = result.scalar_one_or_none()
+                if setting_obj is None:
+                    setting_obj = SystemSetting(
+                        key=CONFIG_KEY_PROXY,
+                        value=json.dumps(save_payload, ensure_ascii=False)
+                    )
+                    db.add(setting_obj)
+                else:
+                    setting_obj.value = json.dumps(save_payload, ensure_ascii=False)
+                await db.commit()
+                logger.info("[ProxyManager] Successfully persisted proxy configuration to PostgreSQL database!")
+        except Exception as exc:
+            logger.error(f"[ProxyManager] Failed to persist proxy config to DB: {exc}")
+
+        # 3. 重新初始化当前实例
+        self._initialized = False
+        self.pool.clear()
+        self._current_sticky_proxy = None
+        if self.refresh_task and not self.refresh_task.done():
+            self.refresh_task.cancel()
+            self.refresh_task = None
+        await self.initialize()
+
     async def initialize(self):
         """初始化代理池并启动后台刷新定时任务"""
         if self._initialized:
@@ -150,21 +274,41 @@ class ProxyManager:
                     self.refresh_task = asyncio.create_task(self._auto_refresh_loop())
 
     async def _auto_refresh_loop(self):
-        """后台定时刷新动态代理池"""
+        """后台定时维护动态代理池 (仅当可用代理不足或长期未更新时温和补充)"""
         while True:
             try:
                 await asyncio.sleep(settings.PROXY_POOL_REFRESH_INTERVAL)
-                await self.refresh_pool()
+                # 只有当可用节点不足阈值时才进行定时拉取，避免无谓消耗 API 次数
+                available_count = sum(1 for p in self.pool.values() if p.is_available)
+                if available_count < settings.PROXY_POOL_MIN_AVAILABLE_THRESHOLD:
+                    logger.info(
+                        f"[ProxyManager] Available proxies ({available_count}) below threshold "
+                        f"({settings.PROXY_POOL_MIN_AVAILABLE_THRESHOLD}), performing routine API refresh..."
+                    )
+                    await self.refresh_pool(force=False)
+                else:
+                    logger.debug(
+                        f"[ProxyManager] Routine check skipped: healthy proxies available ({available_count} >= {settings.PROXY_POOL_MIN_AVAILABLE_THRESHOLD})"
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error(f"[ProxyManager] Auto-refresh loop error: {exc}")
 
-    async def _fetch_from_api_unlocked(self) -> int:
-        """从配置的代理池 API 拉取 IP 列表"""
+    async def _fetch_from_api_unlocked(self, force: bool = False) -> int:
+        """从配置的代理池 API 拉取 IP 列表 (带请求冷却保护)"""
         api_url = settings.PROXY_POOL_API
         if not api_url:
             return 0
+
+        now = time.time()
+        # 频率冷却保护：防止短时间内多次并发请求打满上游代理商 API 限频
+        if not force and (now - self.last_refresh_time) < settings.PROXY_POOL_FETCH_COOLDOWN:
+            logger.debug(
+                f"[ProxyManager] Fetch skipped due to cooldown "
+                f"({now - self.last_refresh_time:.1f}s < {settings.PROXY_POOL_FETCH_COOLDOWN}s)"
+            )
+            return len(self.pool)
 
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
@@ -225,12 +369,12 @@ class ProxyManager:
             logger.error(f"[ProxyManager] Failed to fetch proxies from API ({api_url}): {exc}")
             return 0
 
-    async def refresh_pool(self) -> int:
+    async def refresh_pool(self, force: bool = True) -> int:
         """手动或定时触发刷新"""
         async with self.lock:
             if self.mode != "POOL_API":
                 return len(self.pool)
-            return await self._fetch_from_api_unlocked()
+            return await self._fetch_from_api_unlocked(force=force)
 
     async def get_proxy(self, force_rotate: bool = False) -> Optional[str]:
         """
@@ -382,6 +526,9 @@ class ProxyManager:
         return {
             "mode": self.mode,
             "rotation_strategy": settings.PROXY_ROTATION_STRATEGY,
+            "proxy_url": settings.PROXY_URL,
+            "proxy_pool_api": settings.PROXY_POOL_API,
+            "proxy_pool_list": settings.PROXY_POOL_LIST,
             "total_proxies": total,
             "available_proxies": available,
             "banned_405_count": banned_405,
