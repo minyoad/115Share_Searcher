@@ -49,6 +49,14 @@ class Settings(BaseSettings):
 
     # Worker Settings
     CONCURRENCY: int = 4
+    STUCK_TASK_CHECK_INTERVAL: int = Field(
+        default=60,
+        description="Interval in seconds for background periodic scanning of stuck pending tasks"
+    )
+    STUCK_TASK_TIMEOUT_SECONDS: int = Field(
+        default=300,
+        description="Threshold in seconds (e.g. 5 minutes = 300s) to consider a PENDING task deadlocked and re-enqueue"
+    )
 
     # Proxy Pool Settings (代理池与防封禁中继)
     PROXY_MODE: str = Field(

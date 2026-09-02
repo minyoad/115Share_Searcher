@@ -344,11 +344,13 @@ class Crawler115Engine:
                 receive_code=receive_code,
                 status=ShareStatus.PENDING.value,
                 title="",
+                last_crawled_at=datetime.now(timezone.utc),
             )
             db.add(share_obj)
             await db.flush()
         else:
             share_obj.status = ShareStatus.PENDING.value
+            share_obj.last_crawled_at = datetime.now(timezone.utc)
             if receive_code and not share_obj.receive_code:
                 share_obj.receive_code = receive_code
             await db.flush()

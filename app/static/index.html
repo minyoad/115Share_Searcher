@@ -262,6 +262,14 @@
           
           <div class="flex items-center gap-2">
             <button 
+              @click="recoverStuckTasks"
+              :disabled="recoveringStuck"
+              class="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold rounded-lg transition flex items-center gap-1 disabled:opacity-50"
+              title="扫描并恢复超过5分钟未更新的卡死待抓取任务，重新推入队列"
+            >
+              <span>{{ recoveringStuck ? '扫描恢复中...' : '🛡️ 检查并恢复死锁' }}</span>
+            </button>
+            <button 
               @click="loadShares(sharesPage)"
               :disabled="sharesLoading"
               class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition flex items-center gap-1 disabled:opacity-50"
@@ -1477,6 +1485,28 @@
           loadShares(1);
         };
 
+        const recoveringStuck = ref(false);
+
+        const recoverStuckTasks = async () => {
+          recoveringStuck.value = true;
+          try {
+            const res = await fetch('/api/v1/tasks/recover-stuck', {
+              method: 'POST'
+            });
+            const data = await res.json();
+            if (res.ok) {
+              showToast(data.message || '已完成死锁任务扫描与恢复！');
+              await loadShares(1);
+            } else {
+              showToast('恢复死锁任务失败: ' + (data.detail || '未知错误'));
+            }
+          } catch (err) {
+            showToast('请求异常: ' + err.message);
+          } finally {
+            recoveringStuck.value = false;
+          }
+        };
+
         const submitBatchImport = async () => {
           if (parsedPreviewList.value.length === 0) return;
 
@@ -1580,6 +1610,8 @@
           searchByShare,
           switchToTasks,
           submitBatchImport,
+          recoveringStuck,
+          recoverStuckTasks,
         };
       }
     }).mount('#app');

@@ -627,3 +627,23 @@ async def update_proxy_config(payload: ProxyConfigUpdateRequest):
         "current_status": proxy_mgr.get_status(),
     }
 
+
+@app.post(
+    "/api/v1/tasks/recover-stuck",
+    summary="手动扫描并恢复死锁/超时的抓取任务",
+)
+async def manual_recover_stuck_tasks(
+    timeout_seconds: Optional[int] = Query(None, description="自定义死锁超时秒数（默认 300 秒 / 5 分钟）"),
+):
+    """
+    检查并恢复数据库中 status=0 且超过 5 分钟（或指定秒数）未更新的卡死分享任务，重置时间戳并重新推入爬取队列。
+    """
+    from app.worker import recover_stuck_pending_shares
+    count = await recover_stuck_pending_shares(timeout_seconds=timeout_seconds)
+    return {
+        "status": "success",
+        "recovered_count": count,
+        "message": f"死锁扫描与恢复完成，已成功恢复并重新入队 {count} 个卡死分享任务。"
+    }
+
+
