@@ -36,11 +36,12 @@ class Settings(BaseSettings):
     CRAWLER_COOKIE: str = Field(default="", description="Optional 115 VIP/User Cookie to bypass rate limits")
     CRAWLER_REFERER: str = "https://115.com/"
     CRAWLER_SNAP_URL: str = "https://webapi.115.com/share/snap"
-    CRAWLER_PAGE_SIZE: int = 1000  # 115 Snap API supports up to 1000/1150 items per call (10x faster)
-    CRAWLER_CONCURRENCY: int = 6   # Concurrent directory crawlers per share
-    CRAWLER_BATCH_UPSERT_SIZE: int = 1000  # Pipeline DB batch write size
-    CRAWLER_RATE_MIN: float = 0.15  # seconds (reduced latency with connection pool)
-    CRAWLER_RATE_MAX: float = 0.40  # seconds
+    CRAWLER_METHOD: str = "POST"  # 115 webapi.115.com/share/snap prefers POST to prevent HTTP 405
+    CRAWLER_PAGE_SIZE: int = 100   # 115 Snap API standard safe batch size (100 or 115)
+    CRAWLER_CONCURRENCY: int = 4   # Concurrent directory crawlers per share
+    CRAWLER_BATCH_UPSERT_SIZE: int = 500  # Pipeline DB batch write size
+    CRAWLER_RATE_MIN: float = 0.25  # seconds
+    CRAWLER_RATE_MAX: float = 0.60  # seconds
     CRAWLER_MAX_RETRIES: int = 4
     CRAWLER_TIMEOUT: float = 20.0
 

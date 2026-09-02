@@ -173,11 +173,12 @@ class Settings(BaseSettings):
     CRAWLER_COOKIE: str = Field(default="", description="Optional 115 VIP/User Cookie to bypass rate limits")
     CRAWLER_REFERER: str = "https://115.com/"
     CRAWLER_SNAP_URL: str = "https://webapi.115.com/share/snap"
-    CRAWLER_PAGE_SIZE: int = 1000  # 115 Snap API supports up to 1000 items per call (10x faster)
-    CRAWLER_CONCURRENCY: int = 6   # Concurrent directory crawlers per share
-    CRAWLER_BATCH_UPSERT_SIZE: int = 1000  # Pipeline DB batch write size
-    CRAWLER_RATE_MIN: float = 0.15  # seconds
-    CRAWLER_RATE_MAX: float = 0.40  # seconds
+    CRAWLER_METHOD: str = "POST"  # 115 webapi.115.com/share/snap prefers POST to prevent HTTP 405
+    CRAWLER_PAGE_SIZE: int = 100   # 115 Snap API standard safe batch size
+    CRAWLER_CONCURRENCY: int = 4   # Concurrent directory crawlers per share
+    CRAWLER_BATCH_UPSERT_SIZE: int = 500  # Pipeline DB batch write size
+    CRAWLER_RATE_MIN: float = 0.25  # seconds
+    CRAWLER_RATE_MAX: float = 0.60  # seconds
     CRAWLER_MAX_RETRIES: int = 4
     CRAWLER_TIMEOUT: float = 20.0
 
@@ -485,12 +486,16 @@ class Crawler115Engine:
         self.timeout = timeout or settings.CRAWLER_TIMEOUT
         self.snap_url = settings.CRAWLER_SNAP_URL
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self, share_code: str = "", receive_code: str = "") -> Dict[str, str]:
+        referer = f"https://115.com/s/{share_code}?password={receive_code}" if share_code else settings.CRAWLER_REFERER
         headers = {
             "User-Agent": self.user_agent,
-            "Referer": settings.CRAWLER_REFERER,
-            "Accept": "application/json, text/plain, */*",
+            "Referer": referer,
+            "Origin": "https://115.com",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Connection": "keep-alive",
         }
         if self.cookie:
@@ -498,26 +503,38 @@ class Crawler115Engine:
         return headers
 
     async def _fetch_snap_page(
-        self, client: httpx.AsyncClient, share_code: str, receive_code: str, cid: str, offset: int = 0, limit: int = 1000
+        self, client: httpx.AsyncClient, share_code: str, receive_code: str, cid: str, offset: int = 0, limit: int = 100
     ) -> Dict[str, Any]:
-        params = {
+        data_payload = {
             "share_code": share_code,
             "receive_code": receive_code,
-            "cid": cid,
-            "offset": offset,
-            "limit": limit,
-            "asc": 1,
+            "cid": str(cid),
+            "offset": str(offset),
+            "limit": str(limit),
+            "asc": "1",
             "order": "user_ptime",
         }
         retries = 0
         backoff = 0.8
+        req_method = settings.CRAWLER_METHOD.upper()
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
             try:
                 delay = random.uniform(settings.CRAWLER_RATE_MIN, settings.CRAWLER_RATE_MAX)
                 await asyncio.sleep(delay)
+                headers = self._get_headers(share_code, receive_code)
 
-                response = await client.get(self.snap_url, params=params, headers=self._get_headers(), timeout=self.timeout)
+                if req_method == "POST":
+                    response = await client.post(self.snap_url, data=data_payload, headers=headers, timeout=self.timeout)
+                else:
+                    response = await client.get(self.snap_url, params=data_payload, headers=headers, timeout=self.timeout)
+
+                if response.status_code == 405:
+                    req_method = "GET" if req_method == "POST" else "POST"
+                    retries += 1
+                    await asyncio.sleep(0.5)
+                    continue
+
                 if response.status_code != 200:
                     retries += 1
                     await asyncio.sleep(backoff)
