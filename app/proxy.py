@@ -225,6 +225,9 @@ class ProxyManager:
                     new_pool_list = str(data.get("proxy_pool_list") or "")
                     new_strategy = str(data.get("rotation_strategy") or settings.PROXY_ROTATION_STRATEGY)
                     new_interval = int(data.get("refresh_interval") or settings.PROXY_POOL_REFRESH_INTERVAL)
+                    new_concurrency = int(data.get("crawler_concurrency") or settings.CRAWLER_CONCURRENCY)
+                    new_rate_min = float(data.get("crawler_rate_min") or settings.CRAWLER_RATE_MIN)
+                    new_rate_max = float(data.get("crawler_rate_max") or settings.CRAWLER_RATE_MAX)
 
                     if (
                         new_mode != settings.PROXY_MODE
@@ -233,6 +236,9 @@ class ProxyManager:
                         or new_pool_list != settings.PROXY_POOL_LIST
                         or new_strategy != settings.PROXY_ROTATION_STRATEGY
                         or new_interval != settings.PROXY_POOL_REFRESH_INTERVAL
+                        or new_concurrency != settings.CRAWLER_CONCURRENCY
+                        or new_rate_min != settings.CRAWLER_RATE_MIN
+                        or new_rate_max != settings.CRAWLER_RATE_MAX
                     ):
                         changed = True
 
@@ -242,6 +248,9 @@ class ProxyManager:
                     settings.PROXY_POOL_LIST = new_pool_list
                     settings.PROXY_ROTATION_STRATEGY = new_strategy
                     settings.PROXY_POOL_REFRESH_INTERVAL = new_interval
+                    settings.CRAWLER_CONCURRENCY = new_concurrency
+                    settings.CRAWLER_RATE_MIN = new_rate_min
+                    settings.CRAWLER_RATE_MAX = new_rate_max
                     self.mode = new_mode
 
                     if changed or force or not self._initialized:
@@ -284,6 +293,15 @@ class ProxyManager:
         if config_data.get("refresh_interval") is not None:
             settings.PROXY_POOL_REFRESH_INTERVAL = int(config_data["refresh_interval"])
 
+        if config_data.get("crawler_concurrency") is not None:
+            settings.CRAWLER_CONCURRENCY = max(1, int(config_data["crawler_concurrency"]))
+
+        if config_data.get("crawler_rate_min") is not None:
+            settings.CRAWLER_RATE_MIN = max(0.01, float(config_data["crawler_rate_min"]))
+
+        if config_data.get("crawler_rate_max") is not None:
+            settings.CRAWLER_RATE_MAX = max(0.01, float(config_data["crawler_rate_max"]))
+
         # 2. 持久化到 PostgreSQL
         save_payload = {
             "mode": settings.PROXY_MODE,
@@ -292,6 +310,9 @@ class ProxyManager:
             "proxy_pool_list": settings.PROXY_POOL_LIST,
             "rotation_strategy": settings.PROXY_ROTATION_STRATEGY,
             "refresh_interval": settings.PROXY_POOL_REFRESH_INTERVAL,
+            "crawler_concurrency": settings.CRAWLER_CONCURRENCY,
+            "crawler_rate_min": settings.CRAWLER_RATE_MIN,
+            "crawler_rate_max": settings.CRAWLER_RATE_MAX,
         }
 
         try:
@@ -751,6 +772,9 @@ class ProxyManager:
             "current_sticky_proxy": self._current_sticky_proxy if self.mode != "OFF" else None,
             "last_refresh_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_refresh_time)) if self.last_refresh_time else None,
             "refresh_interval_sec": settings.PROXY_POOL_REFRESH_INTERVAL,
+            "crawler_concurrency": settings.CRAWLER_CONCURRENCY,
+            "crawler_rate_min": settings.CRAWLER_RATE_MIN,
+            "crawler_rate_max": settings.CRAWLER_RATE_MAX,
             "api_endpoint": settings.PROXY_POOL_API if self.mode == "POOL_API" else None,
             "sample_nodes": nodes_summary,
         }

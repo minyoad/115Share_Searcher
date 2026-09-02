@@ -405,7 +405,7 @@ class Crawler115Engine:
         await proxy_mgr.initialize()
 
         http_limits = httpx.Limits(
-            max_keepalive_connections=20, max_connections=30, keepalive_expiry=30.0
+            max_keepalive_connections=50, max_connections=100, keepalive_expiry=30.0
         )
         http_pool = HttpClientPool(limits=http_limits, timeout=self.timeout)
 

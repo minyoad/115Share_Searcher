@@ -635,6 +635,12 @@ async def update_proxy_config(payload: ProxyConfigUpdateRequest):
         config_dict["rotation_strategy"] = payload.rotation_strategy
     if payload.refresh_interval is not None:
         config_dict["refresh_interval"] = payload.refresh_interval
+    if payload.crawler_concurrency is not None:
+        config_dict["crawler_concurrency"] = payload.crawler_concurrency
+    if payload.crawler_rate_min is not None:
+        config_dict["crawler_rate_min"] = payload.crawler_rate_min
+    if payload.crawler_rate_max is not None:
+        config_dict["crawler_rate_max"] = payload.crawler_rate_max
 
     await proxy_mgr.save_config(config_dict)
 

@@ -1109,6 +1109,54 @@
               />
             </div>
 
+            <!-- Crawler Speed & Concurrency Settings -->
+            <div class="pt-3 border-t border-slate-200">
+              <div class="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1.5">
+                <span>⚡ 爬虫抓取提速与协程并发设置</span>
+                <span class="text-[10px] font-normal text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">开启代理池后可调大</span>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 text-xs mb-1">协程并发数 (Tasks)</label>
+                  <input
+                    v-model.number="proxyForm.crawler_concurrency"
+                    type="number"
+                    min="1"
+                    max="50"
+                    placeholder="默认 12"
+                    class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-mono"
+                  />
+                  <span class="text-[10px] text-slate-400 block mt-0.5">多目录抓取并行协程</span>
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 text-xs mb-1">最小请求间隔 (秒)</label>
+                  <input
+                    v-model.number="proxyForm.crawler_rate_min"
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="2.0"
+                    placeholder="默认 0.05"
+                    class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-mono"
+                  />
+                  <span class="text-[10px] text-slate-400 block mt-0.5">API 两次请求极小间隔</span>
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 text-xs mb-1">最大请求间隔 (秒)</label>
+                  <input
+                    v-model.number="proxyForm.crawler_rate_max"
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="5.0"
+                    placeholder="默认 0.15"
+                    class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-mono"
+                  />
+                  <span class="text-[10px] text-slate-400 block mt-0.5">API 两次请求极大间隔</span>
+                </div>
+              </div>
+            </div>
+
             <button
               type="submit"
               class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition shadow-sm text-xs"
@@ -1185,7 +1233,10 @@
           proxy_pool_api: '',
           proxy_pool_list: '',
           rotation_strategy: 'rotate_on_error',
-          refresh_interval: 45
+          refresh_interval: 600,
+          crawler_concurrency: 12,
+          crawler_rate_min: 0.05,
+          crawler_rate_max: 0.15
         });
 
         const fetchProxyStatus = async () => {
@@ -1198,6 +1249,9 @@
               proxyForm.value.mode = data.mode || 'OFF';
               proxyForm.value.rotation_strategy = data.rotation_strategy || 'rotate_on_error';
               proxyForm.value.refresh_interval = data.refresh_interval_sec || 600;
+              proxyForm.value.crawler_concurrency = data.crawler_concurrency || 12;
+              proxyForm.value.crawler_rate_min = data.crawler_rate_min !== undefined ? data.crawler_rate_min : 0.05;
+              proxyForm.value.crawler_rate_max = data.crawler_rate_max !== undefined ? data.crawler_rate_max : 0.15;
               if (data.proxy_url) proxyForm.value.proxy_url = data.proxy_url;
               if (data.proxy_pool_api || data.api_endpoint) proxyForm.value.proxy_pool_api = data.proxy_pool_api || data.api_endpoint;
               if (data.proxy_pool_list) proxyForm.value.proxy_pool_list = data.proxy_pool_list;
@@ -1285,14 +1339,17 @@
                 proxy_pool_api: proxyForm.value.proxy_pool_api,
                 proxy_pool_list: proxyForm.value.proxy_pool_list,
                 rotation_strategy: proxyForm.value.rotation_strategy,
-                refresh_interval: proxyForm.value.refresh_interval
+                refresh_interval: proxyForm.value.refresh_interval,
+                crawler_concurrency: proxyForm.value.crawler_concurrency,
+                crawler_rate_min: proxyForm.value.crawler_rate_min,
+                crawler_rate_max: proxyForm.value.crawler_rate_max
               })
             });
             if (res.ok) {
               const data = await res.json();
               if (data.current_status) proxyStatus.value = data.current_status;
               proxySaveSuccess.value = true;
-              showToast('代理配置已热更新生效！');
+              showToast('代理与爬虫并发配置已热更新生效！');
               setTimeout(() => { proxySaveSuccess.value = false; }, 3000);
             }
           } catch (err) {

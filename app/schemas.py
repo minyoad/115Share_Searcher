@@ -257,11 +257,14 @@ class ProxyTestRequest(BaseModel):
 
 
 class ProxyConfigUpdateRequest(BaseModel):
-    """代理运行时配置热更新请求"""
+    """代理运行时与爬虫并发配置热更新请求"""
     mode: Optional[str] = Field(default=None, description="OFF, STATIC, POOL_API, CUSTOM_LIST")
     proxy_url: Optional[str] = Field(default=None, description="单个静态代理URL")
     proxy_pool_api: Optional[str] = Field(default=None, description="动态代理池API")
     proxy_pool_list: Optional[str] = Field(default=None, description="多静态代理逗号/换行列表")
     rotation_strategy: Optional[str] = Field(default=None, description="rotate_on_error, rotate_per_request, round_robin")
     refresh_interval: Optional[int] = Field(default=None, description="刷新间隔(秒)")
+    crawler_concurrency: Optional[int] = Field(default=None, description="爬虫目录抓取协程并发数 (默认 12)")
+    crawler_rate_min: Optional[float] = Field(default=None, description="请求最小间隔秒数 (如 0.05)")
+    crawler_rate_max: Optional[float] = Field(default=None, description="请求最大间隔秒数 (如 0.15)")
 
