@@ -215,11 +215,27 @@ class FileTreeNode(BaseModel):
     full_path: str
 
 
+class DirectoryBreadcrumb(BaseModel):
+    name: str
+    cid: str
+    path: str
+
+
 class DirectoryListResponse(BaseModel):
     """目录列表响应"""
     share_code: str
+    share_title: str = ""
+    receive_code: str = ""
+    share_status: int = 1
+    share_url: str = ""
     parent_115_id: str
+    parent_path: str = "/"
     total: int
+    folder_count: int = 0
+    file_count: int = 0
+    total_size: int = 0
+    total_size_formatted: str = "0 B"
+    breadcrumbs: List[DirectoryBreadcrumb] = []
     items: List[FileTreeNode]
 
 

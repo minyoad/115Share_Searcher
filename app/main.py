@@ -417,6 +417,28 @@ async def list_share_directory(
             detail=f"未找到分享代码 {share_code}"
         )
 
+    # Find parent folder info if not root
+    parent_path = "/"
+    breadcrumbs = [{"name": "根目录", "cid": "0", "path": "/"}]
+    
+    if parent_115_id != "0":
+        parent_stmt = select(File).where(
+            File.share_id == share_obj.id,
+            File.file_115_id == parent_115_id,
+            File.is_dir.is_(True)
+        )
+        parent_rec = (await db.execute(parent_stmt)).scalar_one_or_none()
+        if parent_rec:
+            parent_path = parent_rec.full_path
+            # Build breadcrumbs from path
+            parts = [p for p in parent_path.strip("/").split("/") if p]
+            curr_accum = ""
+            for idx, part in enumerate(parts):
+                curr_accum += "/" + part
+                # If this is the current folder, its cid is parent_115_id
+                cid_val = parent_115_id if idx == len(parts) - 1 else ""
+                breadcrumbs.append({"name": part, "cid": cid_val, "path": curr_accum})
+
     files_stmt = (
         select(File)
         .where(
@@ -427,26 +449,50 @@ async def list_share_directory(
     )
     file_rows = (await db.execute(files_stmt)).scalars().all()
 
-    items = [
-        FileTreeNode(
-            id=f.id,
-            file_115_id=f.file_115_id,
-            parent_115_id=f.parent_115_id,
-            name=f.name,
-            extension=f.extension,
-            size=f.size,
-            formatted_size=format_size(f.size),
-            is_dir=f.is_dir,
-            sha1=f.sha1,
-            full_path=f.full_path,
+    folder_count = 0
+    file_count = 0
+    total_folder_size = 0
+
+    items = []
+    for f in file_rows:
+        if f.is_dir:
+            folder_count += 1
+        else:
+            file_count += 1
+            total_folder_size += f.size
+
+        items.append(
+            FileTreeNode(
+                id=f.id,
+                file_115_id=f.file_115_id,
+                parent_115_id=f.parent_115_id,
+                name=f.name,
+                extension=f.extension,
+                size=f.size,
+                formatted_size=format_size(f.size),
+                is_dir=f.is_dir,
+                sha1=f.sha1,
+                full_path=f.full_path,
+            )
         )
-        for f in file_rows
-    ]
+
+    pwd_suffix = f"?password={share_obj.receive_code}" if share_obj.receive_code else ""
+    share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}"
 
     return DirectoryListResponse(
         share_code=share_code,
+        share_title=share_obj.title or f"115 分享 ({share_obj.share_code})",
+        receive_code=share_obj.receive_code or "",
+        share_status=share_obj.status,
+        share_url=share_url,
         parent_115_id=parent_115_id,
+        parent_path=parent_path,
         total=len(items),
+        folder_count=folder_count,
+        file_count=file_count,
+        total_size=total_folder_size,
+        total_size_formatted=format_size(total_folder_size),
+        breadcrumbs=breadcrumbs,
         items=items,
     )
 

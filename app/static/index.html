@@ -43,6 +43,13 @@
           <span v-if="sharesStats && sharesStats.pending_shares > 0" class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
         </button>
         <button 
+          @click="switchToTree()"
+          :class="activeTab === 'tree' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
+          class="px-3.5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
+        >
+          🌳 层级目录树
+        </button>
+        <button 
           @click="activeTab = 'import'"
           :class="activeTab === 'import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
           class="px-3.5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
@@ -155,13 +162,22 @@
 
               <!-- Actions -->
               <div class="flex flex-col items-end gap-2 shrink-0">
-                <a 
-                  :href="item.share_url" 
-                  target="_blank"
-                  class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
-                >
-                  直达 115 分享 ↗
-                </a>
+                <div class="flex items-center gap-1.5">
+                  <button 
+                    @click="openTree(item.share_code, item.parent_115_id)"
+                    class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg shadow-xs transition flex items-center gap-1"
+                    title="在层级目录树中打开并浏览该文件所在文件夹"
+                  >
+                    🌳 所在目录
+                  </button>
+                  <a 
+                    :href="item.share_url" 
+                    target="_blank"
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition"
+                  >
+                    直达 115 ↗
+                  </a>
+                </div>
                 <button 
                   @click="copyText(item.openlist_mount_cid, 'AList/OpenList 挂载 CID 已复制')"
                   class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs rounded transition"
@@ -359,11 +375,19 @@
               </button>
 
               <button 
+                @click="openTree(s.share_code, '0')"
+                class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg transition flex items-center gap-1 shadow-xs"
+                title="浏览该 115 分享的完整层级目录与子文件"
+              >
+                🌳 层级目录
+              </button>
+
+              <button 
                 @click="searchByShare(s.share_code)"
                 class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg transition"
                 title="进入搜索并查看该分享下的所有资源"
               >
-                🔍 检索资源
+                🔍 检索
               </button>
 
               <a 
@@ -401,6 +425,229 @@
       <div v-else-if="!sharesLoading" class="text-center py-16 bg-white rounded-2xl border border-slate-200 text-slate-500">
         <p class="text-base font-medium text-slate-700">暂无符合条件的分享任务</p>
         <p class="text-xs mt-1">您可以点击右上角「提交新链接」开始收录 115 资源。</p>
+      </div>
+    </section>
+
+    <!-- TAB 3: Hierarchical Directory Tree View -->
+    <section v-if="activeTab === 'tree'" class="space-y-4">
+      <!-- Top Share Selector & Explorer Bar -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div class="flex items-center gap-2 flex-wrap flex-1">
+            <span class="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+              <span>🌳</span> 分享资源层级目录树
+            </span>
+            <!-- Share Selector Dropdown -->
+            <select 
+              v-model="treeShareCode" 
+              @change="onTreeShareSelectChange"
+              class="px-3 py-1.5 rounded-lg border border-slate-300 text-xs bg-slate-50 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-xs"
+            >
+              <option value="" disabled>-- 选择要浏览的 115 分享 --</option>
+              <option v-for="s in sharesList" :key="s.id" :value="s.share_code">
+                {{ s.title }} ({{ s.share_code }})
+              </option>
+            </select>
+          </div>
+
+          <!-- Direct Input or Switch -->
+          <div class="flex items-center gap-2">
+            <input 
+              v-model="treeManualCode" 
+              type="text" 
+              placeholder="输入分享代码..."
+              class="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-mono w-36 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              @keyup.enter="loadTree(treeManualCode, '0')"
+            />
+            <button 
+              @click="loadTree(treeManualCode, '0')"
+              :disabled="!treeManualCode || treeLoading"
+              class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50 shadow-xs"
+            >
+              载入目录
+            </button>
+          </div>
+        </div>
+
+        <!-- Share Metadata Header (If Loaded) -->
+        <div v-if="treeData" class="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+          <div class="space-y-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-bold text-slate-900 text-sm truncate">{{ treeData.share_title }}</span>
+              <span class="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 font-semibold text-slate-700">{{ treeData.share_code }}</span>
+              <span v-if="treeData.receive_code" class="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 font-mono">密码: {{ treeData.receive_code }}</span>
+            </div>
+            <div class="text-slate-500 flex items-center gap-3">
+              <span>当前目录包含: <strong class="text-slate-800">{{ treeData.folder_count }}</strong> 文件夹，<strong class="text-slate-800">{{ treeData.file_count }}</strong> 文件</span>
+              <span>文件夹总大小: <strong class="text-slate-800">{{ treeData.total_size_formatted }}</strong></span>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 shrink-0">
+            <button 
+              @click="copyText(treeData.parent_path, '当前全路径已复制')"
+              class="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded border border-slate-200 transition"
+              title="复制当前目录的绝对虚拟路径"
+            >
+              📋 复制路径
+            </button>
+            <a 
+              :href="treeData.share_url" 
+              target="_blank"
+              class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition"
+            >
+              115 原网页 ↗
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Breadcrumbs & Directory Action Toolbar -->
+      <div v-if="treeData" class="bg-white rounded-xl p-3 sm:p-4 border border-slate-200 shadow-xs space-y-3">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+          <!-- Breadcrumb Navigation -->
+          <div class="flex items-center gap-1.5 flex-wrap text-xs text-slate-600 font-medium overflow-x-auto max-w-full">
+            <button 
+              @click="loadTree(treeShareCode, '0')"
+              class="px-2 py-1 rounded hover:bg-blue-50 hover:text-blue-600 transition flex items-center gap-1 font-bold text-slate-800"
+            >
+              <span>🏠 根目录</span>
+            </button>
+
+            <template v-for="(crumb, idx) in treeBreadcrumbs" :key="idx">
+              <span class="text-slate-300">/</span>
+              <button 
+                v-if="idx < treeBreadcrumbs.length - 1"
+                @click="goBackToCrumb(crumb)"
+                class="px-2 py-1 rounded hover:bg-blue-50 hover:text-blue-600 transition text-slate-700"
+              >
+                {{ crumb.name }}
+              </button>
+              <span v-else class="px-2 py-1 font-bold text-blue-600 bg-blue-50 rounded">
+                {{ crumb.name }}
+              </span>
+            </template>
+          </div>
+
+          <!-- Fast actions: Up one level & Filter -->
+          <div class="flex items-center gap-2 self-end sm:self-center shrink-0">
+            <button 
+              v-if="treeCurrentCid !== '0'"
+              @click="goUpOneLevel()"
+              class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition flex items-center gap-1"
+            >
+              <span>⬆️ 返回上级</span>
+            </button>
+            <input 
+              v-model="treeFilterKeyword" 
+              type="text" 
+              placeholder="筛选当前目录..."
+              class="px-2.5 py-1 border border-slate-200 rounded-lg text-xs w-32 sm:w-40 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        <!-- Files & Folders List Table / Grid -->
+        <div class="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100">
+          <!-- Loading state -->
+          <div v-if="treeLoading" class="py-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
+            <span class="animate-spin text-lg">⏳</span>
+            <span>正在读取当前层级目录节点...</span>
+          </div>
+
+          <!-- Empty directory state -->
+          <div v-else-if="filteredTreeItems.length === 0" class="py-12 text-center text-slate-400 text-xs">
+            <p class="text-sm font-medium text-slate-600">当前文件夹为空或未匹配到文件</p>
+            <p class="text-[11px] text-slate-400 mt-1">若刚提交爬取，后台 Worker 可能仍在逐层写入中。</p>
+          </div>
+
+          <!-- Directory Nodes -->
+          <div 
+            v-else
+            v-for="item in filteredTreeItems" 
+            :key="item.id"
+            class="p-3.5 hover:bg-slate-50 transition flex items-center justify-between gap-3 group"
+          >
+            <!-- Left Node Info -->
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <!-- Folder / File Icon -->
+              <div 
+                v-if="item.is_dir"
+                @click="drillDown(item.file_115_id, item.name, item.full_path)"
+                class="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-lg cursor-pointer hover:bg-amber-100 transition shrink-0"
+                title="点击进入子目录"
+              >
+                📁
+              </div>
+              <div 
+                v-else
+                class="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-mono font-bold text-[11px] uppercase shrink-0"
+              >
+                {{ item.extension ? item.extension.substring(0, 4) : 'FILE' }}
+              </div>
+
+              <!-- Name & Path -->
+              <div class="space-y-0.5 min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <h4 
+                    v-if="item.is_dir"
+                    @click="drillDown(item.file_115_id, item.name, item.full_path)"
+                    class="text-sm font-bold text-slate-900 hover:text-blue-600 cursor-pointer truncate transition"
+                    :title="item.name"
+                  >
+                    {{ item.name }}
+                  </h4>
+                  <h4 
+                    v-else
+                    class="text-sm font-medium text-slate-800 truncate"
+                    :title="item.name"
+                  >
+                    {{ item.name }}
+                  </h4>
+
+                  <span 
+                    v-if="item.is_dir" 
+                    @click="drillDown(item.file_115_id, item.name, item.full_path)"
+                    class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 cursor-pointer hover:bg-amber-200 transition shrink-0"
+                  >
+                    子文件夹 ➔
+                  </span>
+                </div>
+
+                <div class="flex items-center gap-4 text-[11px] text-slate-400">
+                  <span v-if="!item.is_dir">大小: <strong class="text-slate-600">{{ item.formatted_size }}</strong></span>
+                  <span v-if="item.sha1">SHA1: <span class="font-mono text-slate-500">{{ item.sha1.substring(0, 8) }}...</span></span>
+                  <span class="font-mono text-slate-400">115 ID: {{ item.file_115_id }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Actions -->
+            <div class="flex items-center gap-2 shrink-0">
+              <button 
+                v-if="item.is_dir"
+                @click="drillDown(item.file_115_id, item.name, item.full_path)"
+                class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition"
+              >
+                打开目录 ➔
+              </button>
+              <button 
+                @click="copyText(item.file_115_id, (item.is_dir ? '目录 CID ' : '文件 FID ') + item.file_115_id + ' 已复制')"
+                class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs rounded transition"
+                :title="'复制用于 OpenList/AList 挂载的 ' + (item.is_dir ? 'CID' : 'FID')"
+              >
+                复制 ID
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tree Initial / Empty Placeholder -->
+      <div v-else-if="!treeLoading" class="text-center py-16 bg-white rounded-2xl border border-slate-200 text-slate-500">
+        <span class="text-3xl">🌳</span>
+        <p class="text-base font-medium text-slate-800 mt-2">请在上方的下拉框选择或输入要浏览的 115 分享代码</p>
+        <p class="text-xs text-slate-400 mt-1">系统将即时读取 PostgreSQL 中的树状文件结构并支持按层级递进展开。</p>
       </div>
     </section>
 
@@ -523,6 +770,93 @@
         const importResult = ref(null);
         const toastMessage = ref('');
         let pollTimer = null;
+
+        // Tree View reactive state
+        const treeShareCode = ref('');
+        const treeManualCode = ref('');
+        const treeCurrentCid = ref('0');
+        const treeLoading = ref(false);
+        const treeData = ref(null);
+        const treeBreadcrumbs = ref([]);
+        const treeFilterKeyword = ref('');
+
+        const filteredTreeItems = computed(() => {
+          if (!treeData.value || !treeData.value.items) return [];
+          if (!treeFilterKeyword.value.trim()) return treeData.value.items;
+          const kw = treeFilterKeyword.value.trim().toLowerCase();
+          return treeData.value.items.filter(item => 
+            item.name.toLowerCase().includes(kw) || 
+            (item.extension && item.extension.toLowerCase().includes(kw))
+          );
+        });
+
+        const loadTree = async (shareCode, cid = '0') => {
+          if (!shareCode) return;
+          const cleanCode = shareCode.trim();
+          treeShareCode.value = cleanCode;
+          treeManualCode.value = cleanCode;
+          treeCurrentCid.value = cid;
+          treeLoading.value = true;
+
+          try {
+            const params = new URLSearchParams({ parent_115_id: cid });
+            const res = await fetch(`/api/v1/shares/${encodeURIComponent(cleanCode)}/files?${params.toString()}`);
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              throw new Error(errData.detail || '读取目录失败，请检查分享代码');
+            }
+            const data = await res.json();
+            treeData.value = data;
+            
+            // Sync breadcrumbs
+            if (data.breadcrumbs && data.breadcrumbs.length > 0) {
+              treeBreadcrumbs.value = data.breadcrumbs.slice(1); // Exclude root in loop since root button is static
+            } else {
+              treeBreadcrumbs.value = [];
+            }
+          } catch (err) {
+            showToast('层级目录读取失败: ' + err.message);
+          } finally {
+            treeLoading.value = false;
+          }
+        };
+
+        const openTree = (shareCode, cid = '0') => {
+          activeTab.value = 'tree';
+          loadTree(shareCode, cid || '0');
+        };
+
+        const onTreeShareSelectChange = () => {
+          if (treeShareCode.value) {
+            loadTree(treeShareCode.value, '0');
+          }
+        };
+
+        const drillDown = (cid, name, fullPath) => {
+          if (!cid) return;
+          loadTree(treeShareCode.value, cid);
+        };
+
+        const goBackToCrumb = (crumb) => {
+          loadTree(treeShareCode.value, crumb.cid || '0');
+        };
+
+        const goUpOneLevel = () => {
+          if (treeBreadcrumbs.value.length > 1) {
+            const target = treeBreadcrumbs.value[treeBreadcrumbs.value.length - 2];
+            loadTree(treeShareCode.value, target.cid || '0');
+          } else {
+            loadTree(treeShareCode.value, '0');
+          }
+        };
+
+        const switchToTree = () => {
+          activeTab.value = 'tree';
+          if (!treeShareCode.value && sharesList.value.length > 0) {
+            treeShareCode.value = sharesList.value[0].share_code;
+            loadTree(treeShareCode.value, '0');
+          }
+        };
 
         const showToast = (msg) => {
           toastMessage.value = msg;
@@ -728,6 +1062,21 @@
           importLoading,
           importResult,
           toastMessage,
+          treeShareCode,
+          treeManualCode,
+          treeCurrentCid,
+          treeLoading,
+          treeData,
+          treeBreadcrumbs,
+          treeFilterKeyword,
+          filteredTreeItems,
+          loadTree,
+          openTree,
+          onTreeShareSelectChange,
+          drillDown,
+          goBackToCrumb,
+          goUpOneLevel,
+          switchToTree,
           doSearch,
           toggleExt,
           copyText,
