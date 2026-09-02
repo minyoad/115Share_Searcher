@@ -33,11 +33,11 @@ class ShareBannedError(ShareCrawlerError):
 
 class Crawler115Engine:
     """
-    115 分享快照递归爬虫引擎
-    针对 115 官方 share/snap 接口规范：
-    - API: https://webapi.115.com/share/snap
-    - 请求方式: POST (通过 application/x-www-form-urlencoded 传参) 或 GET (自动降级)
-    - 携带标准浏览器头与 Cookie
+    115 分享快照递归爬虫引擎 (对齐 AList / OpenList 底层驱动实现)
+    - 采用标准 GET 协议
+    - 自动清理 WAF 脏 Cookie (剔除易触发拦截的 acw_tc / acw_sc__v2)
+    - 保留核心三件套 (UID, CID, SEID)
+    - 精简 Headers，去除触发 WAF 阻断的 Origin / X-Requested-With
     """
 
     SNAP_URL = "https://webapi.115.com/share/snap"
@@ -52,7 +52,38 @@ class Crawler115Engine:
         self.cookie = cookie or settings.CRAWLER_COOKIE
         self.timeout = timeout or settings.CRAWLER_TIMEOUT
 
+    def _sanitize_cookie(self, raw_cookie: str) -> str:
+        """
+        过滤并保留核心 115 鉴权项，彻底剔除过期的 WAF 防火墙跟踪 Cookie (如 acw_tc, acw_sc__v2)
+        """
+        if not raw_cookie:
+            return ""
+        
+        # 允许传递的核心鉴权 Cookie 键
+        allowed_keys = {
+            "UID", "CID", "SEID", "KID", "USERSESSIONID", 
+            "115_lang", "loginType", "PHPSESSID", "GST"
+        }
+        
+        parts = [p.strip() for p in raw_cookie.split(";") if p.strip()]
+        clean_parts = []
+        for part in parts:
+            if "=" in part:
+                k, v = part.split("=", 1)
+                k = k.strip()
+                # 剔除阿里/腾讯 WAF 的临时跟踪标识
+                if k.lower().startswith("acw_") or k.lower().startswith("waf_"):
+                    continue
+                clean_parts.append(f"{k}={v.strip()}")
+            else:
+                clean_parts.append(part)
+        
+        return "; ".join(clean_parts)
+
     def _get_headers(self, share_code: str = "", receive_code: str = "") -> Dict[str, str]:
+        """
+        100% 对齐 AList/OpenList 的纯净请求头 (决不添加触发 405 WAF 的 Origin 头)
+        """
         referer = (
             f"https://115.com/s/{share_code}?password={receive_code}"
             if share_code
@@ -61,11 +92,8 @@ class Crawler115Engine:
         headers = {
             "User-Agent": self.user_agent,
             "Referer": referer,
-            "Origin": "https://115.com",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "X-Requested-With": "XMLHttpRequest",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Connection": "keep-alive",
             "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
             "sec-ch-ua-mobile": "?0",
@@ -74,8 +102,11 @@ class Crawler115Engine:
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
         }
-        if self.cookie:
-            headers["Cookie"] = self.cookie
+        
+        clean_cookie = self._sanitize_cookie(self.cookie)
+        if clean_cookie:
+            headers["Cookie"] = clean_cookie
+            
         return headers
 
     async def _fetch_snap_page(
@@ -88,11 +119,9 @@ class Crawler115Engine:
         limit: int = 100,
     ) -> Dict[str, Any]:
         """
-        请求 115 目录快照。
-        115 webapi.115.com/share/snap 官方 Web 核心端点要求 POST (表单传参)。
-        若遇到异常支持自动在 POST 与 GET 之间自适应切换。
+        以 AList 规范的 GET 请求获取 115 目录快照
         """
-        data_payload = {
+        params = {
             "share_code": share_code,
             "receive_code": receive_code,
             "cid": str(cid),
@@ -104,7 +133,6 @@ class Crawler115Engine:
 
         retries = 0
         backoff = 0.8
-        current_method = "POST"  # 默认 POST 表单方式
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
             try:
@@ -112,31 +140,22 @@ class Crawler115Engine:
                 await asyncio.sleep(delay)
 
                 headers = self._get_headers(share_code, receive_code)
+                response = await client.get(
+                    self.SNAP_URL,
+                    params=params,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
 
-                if current_method == "POST":
-                    response = await client.post(
-                        self.SNAP_URL,
-                        data=data_payload,
-                        headers=headers,
-                        timeout=self.timeout,
-                    )
-                else:
-                    # GET 降级时去掉 POST 专用的 Content-Type 头
-                    get_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
-                    response = await client.get(
-                        self.SNAP_URL,
-                        params=data_payload,
-                        headers=get_headers,
-                        timeout=self.timeout,
-                    )
-
+                # 如果返回 405 说明触发了 WAF 拦截或频控，等待后重试
                 if response.status_code == 405:
                     logger.warning(
-                        f"115 API returned 405 for {current_method} share_code={share_code}, cid={cid}. Switching method."
+                        f"WAF 405 protection triggered for share_code={share_code}, cid={cid}. "
+                        f"Backing off for {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
                     )
-                    current_method = "GET" if current_method == "POST" else "POST"
                     retries += 1
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(backoff)
+                    backoff *= 1.8
                     continue
 
                 if response.status_code != 200:
