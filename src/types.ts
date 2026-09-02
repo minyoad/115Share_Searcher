@@ -35,4 +35,34 @@ export interface FileRecord {
   share_title: string;
 }
 
-export type ActiveTab = 'search' | 'tasks' | 'code' | 'crawler' | 'import' | 'tree' | 'api';
+export interface ProxyNodeInfo {
+  url: string;
+  protocol: string;
+  success_count: number;
+  failure_count: number;
+  consecutive_failures: number;
+  is_available: boolean;
+  is_banned_405: boolean;
+  banned_remaining_sec: number;
+  last_latency_ms: number;
+  recent_errors: string[];
+}
+
+export interface ProxySystemStatus {
+  mode: string;
+  rotation_strategy: string;
+  total_proxies: number;
+  available_proxies: number;
+  banned_405_count: number;
+  failed_count: number;
+  total_success_requests: number;
+  total_failed_requests: number;
+  current_sticky_proxy: string | null;
+  last_refresh_time: string | null;
+  refresh_interval_sec: number;
+  api_endpoint: string | null;
+  sample_nodes: ProxyNodeInfo[];
+}
+
+export type ActiveTab = 'search' | 'tasks' | 'code' | 'crawler' | 'proxy' | 'import' | 'tree' | 'api';
+

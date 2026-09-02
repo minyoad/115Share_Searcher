@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -48,6 +49,44 @@ class Settings(BaseSettings):
 
     # Worker Settings
     CONCURRENCY: int = 4
+
+    # Proxy Pool Settings (代理池与防封禁中继)
+    PROXY_MODE: str = Field(
+        default="OFF", 
+        description="Proxy mode: 'OFF' (direct), 'STATIC' (single proxy), 'POOL_API' (dynamic HTTP API), 'CUSTOM_LIST' (multi static)"
+    )
+    PROXY_URL: Optional[str] = Field(
+        default=None, 
+        description="Single proxy URL (e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080)"
+    )
+    PROXY_POOL_API: Optional[str] = Field(
+        default=None, 
+        description="Dynamic proxy pool API endpoint (e.g. http://127.0.0.1:5010/get_all/ or http://api.proxy.com/get?num=20)"
+    )
+    PROXY_POOL_LIST: Optional[str] = Field(
+        default=None, 
+        description="Comma or newline separated list of proxy URLs (for CUSTOM_LIST mode)"
+    )
+    PROXY_ROTATION_STRATEGY: str = Field(
+        default="rotate_on_error", 
+        description="Rotation strategy: 'rotate_on_error', 'rotate_per_request', 'round_robin'"
+    )
+    PROXY_POOL_REFRESH_INTERVAL: int = Field(
+        default=45, 
+        description="Interval in seconds to auto-refresh proxy pool from API"
+    )
+    PROXY_MAX_CONSECUTIVE_FAILURES: int = Field(
+        default=3, 
+        description="Max consecutive errors before temporary blacklisting a proxy"
+    )
+    PROXY_BAN_DURATION_405: float = Field(
+        default=60.0, 
+        description="Seconds to quarantine a proxy that triggered 115 WAF 405"
+    )
+    PROXY_TIMEOUT: float = Field(
+        default=12.0, 
+        description="Proxy connection timeout in seconds"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import File, Share, ShareStatus
+from app.proxy import ProxyManager
 
 logger = logging.getLogger("app.crawler")
 
@@ -70,6 +71,40 @@ class GlobalPacer:
         async with self._lock:
             loop = asyncio.get_running_loop()
             self._cooldown_until = max(self._cooldown_until, loop.time() + seconds)
+
+
+class HttpClientPool:
+    """
+    自适应 HTTP 客户端连接池管理 (支持直连与多代理节点复用)
+    """
+    def __init__(self, limits: httpx.Limits, timeout: float):
+        self.limits = limits
+        self.timeout = timeout
+        self._clients: Dict[Optional[str], httpx.AsyncClient] = {}
+        self._lock = asyncio.Lock()
+
+    async def get_client(self, proxy_url: Optional[str] = None) -> httpx.AsyncClient:
+        async with self._lock:
+            if proxy_url not in self._clients or self._clients[proxy_url].is_closed:
+                client = httpx.AsyncClient(
+                    proxy=proxy_url,
+                    limits=self.limits,
+                    timeout=self.timeout,
+                    verify=False,
+                    follow_redirects=True,
+                )
+                self._clients[proxy_url] = client
+            return self._clients[proxy_url]
+
+    async def close_all(self):
+        async with self._lock:
+            for client in self._clients.values():
+                if not client.is_closed:
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        pass
+            self._clients.clear()
 
 
 class Crawler115Engine:
@@ -161,7 +196,8 @@ class Crawler115Engine:
 
     async def _fetch_snap_page(
         self,
-        client: httpx.AsyncClient,
+        http_pool: HttpClientPool,
+        proxy_mgr: ProxyManager,
         pacer: GlobalPacer,
         share_code: str,
         receive_code: str,
@@ -170,7 +206,7 @@ class Crawler115Engine:
         limit: int = 100,
     ) -> Dict[str, Any]:
         """
-        以 115 Web 官方标准规范获取目录快照 (支持 POST / GET 智能切换与 405 WAF 防护)
+        以 115 Web 官方标准规范获取目录快照 (支持多代理池轮换、POST/GET 自适应与 405 WAF 智能隔离)
         """
         params = {
             "share_code": share_code,
@@ -185,13 +221,21 @@ class Crawler115Engine:
         retries = 0
         backoff = settings.CRAWLER_BACKOFF_ON_405
         current_method = settings.CRAWLER_DEFAULT_METHOD.upper()
+        force_rotate = False
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
+            current_proxy = None
             try:
                 # 严格通过全局调度器，杜绝突发并发冲击
                 await pacer.acquire()
 
+                # 从代理管理器分配或轮换代理
+                current_proxy = await proxy_mgr.get_proxy(force_rotate=force_rotate)
+                client = await http_pool.get_client(current_proxy)
+                force_rotate = False
+
                 headers = self._get_headers(share_code, receive_code, method=current_method)
+                t_start = asyncio.get_running_loop().time()
 
                 if current_method == "POST":
                     response = await client.post(
@@ -211,25 +255,38 @@ class Crawler115Engine:
                 # 405 WAF 防火墙 / 限制处理
                 if response.status_code == 405:
                     logger.warning(
-                        f"115 WAF 405 on {current_method} for share_code={share_code}, cid={cid}. "
-                        f"Switching method & cooling down for {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
+                        f"115 WAF 405 on {current_method} (proxy: {current_proxy or 'DIRECT'}) "
+                        f"for share_code={share_code}, cid={cid}. Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES}"
                     )
-                    # 触发全局冷却，防止其他 worker 继续发送请求
-                    await pacer.trigger_cooldown(backoff)
-                    # 切换请求方法 (POST <-> GET)
-                    current_method = "GET" if current_method == "POST" else "POST"
-                    retries += 1
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 1.6, 10.0)
+                    # 隔离被封代理并强制轮换
+                    if current_proxy:
+                        await proxy_mgr.mark_failure(current_proxy, is_405=True, reason="WAF 405 Blocked")
+                        force_rotate = True
+
+                    # 若未启用代理（直连模式），触发全局退避熔断
+                    if proxy_mgr.mode == "OFF":
+                        await pacer.trigger_cooldown(backoff)
+                        current_method = "GET" if current_method == "POST" else "POST"
+                        retries += 1
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 1.6, 10.0)
+                    else:
+                        # 代理池模式下，快速换下一个可用 IP 继续请求
+                        retries += 1
+                        await asyncio.sleep(0.3)
                     continue
 
                 if response.status_code != 200:
                     logger.warning(
-                        f"HTTP {response.status_code} for share_code={share_code}, cid={cid}. "
-                        f"Retrying in {backoff:.1f}s (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
+                        f"HTTP {response.status_code} for share_code={share_code}, cid={cid} (proxy: {current_proxy or 'DIRECT'}). "
+                        f"Retrying (Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES})"
                     )
+                    if current_proxy:
+                        await proxy_mgr.mark_failure(current_proxy, is_405=False, reason=f"HTTP {response.status_code}")
+                        force_rotate = True
+
                     retries += 1
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.5)
                     backoff = min(backoff * 1.5, 8.0)
                     continue
 
@@ -251,12 +308,21 @@ class Crawler115Engine:
                     backoff = min(backoff * 1.5, 8.0)
                     continue
 
+                # 记录代理成功请求与延迟
+                latency_ms = (asyncio.get_running_loop().time() - t_start) * 1000
+                if current_proxy:
+                    await proxy_mgr.mark_success(current_proxy, latency_ms)
+
                 return result
 
             except (httpx.RequestError, httpx.TimeoutException) as exc:
-                logger.warning(f"Network error on {self.SNAP_URL} ({current_method}): {exc}")
+                logger.warning(f"Network error on {self.SNAP_URL} via {current_proxy or 'DIRECT'}: {exc}")
+                if current_proxy:
+                    await proxy_mgr.mark_failure(current_proxy, is_405=False, reason=str(exc)[:60])
+                    force_rotate = True
+
                 retries += 1
-                await asyncio.sleep(backoff)
+                await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.3)
                 backoff = min(backoff * 1.5, 8.0)
 
         raise ShareCrawlerError(
@@ -307,60 +373,63 @@ class Crawler115Engine:
             max_delay=settings.CRAWLER_RATE_MAX
         )
 
+        proxy_mgr = ProxyManager.get_instance()
+        await proxy_mgr.initialize()
+
         http_limits = httpx.Limits(
             max_keepalive_connections=20, max_connections=30, keepalive_expiry=30.0
         )
+        http_pool = HttpClientPool(limits=http_limits, timeout=self.timeout)
 
-        async with httpx.AsyncClient(limits=http_limits, verify=True, follow_redirects=True) as client:
-
-            async def db_writer():
-                buffer: List[Dict[str, Any]] = []
-                while True:
-                    item = await db_write_queue.get()
-                    if item is None:
-                        if buffer:
-                            await self._bulk_upsert_files(db, buffer)
-                            buffer.clear()
-                        db_write_queue.task_done()
-                        break
-
-                    buffer.append(item)
-                    if len(buffer) >= settings.CRAWLER_BATCH_UPSERT_SIZE:
+        async def db_writer():
+            buffer: List[Dict[str, Any]] = []
+            while True:
+                item = await db_write_queue.get()
+                if item is None:
+                    if buffer:
                         await self._bulk_upsert_files(db, buffer)
                         buffer.clear()
                     db_write_queue.task_done()
+                    break
 
-            db_writer_task = asyncio.create_task(db_writer())
+                buffer.append(item)
+                if len(buffer) >= settings.CRAWLER_BATCH_UPSERT_SIZE:
+                    await self._bulk_upsert_files(db, buffer)
+                    buffer.clear()
+                db_write_queue.task_done()
 
-            async def dir_worker(worker_id: int):
-                while True:
-                    try:
-                        current_cid, current_virtual_path = await asyncio.wait_for(
-                            dir_queue.get(), timeout=3.0
+        db_writer_task = asyncio.create_task(db_writer())
+
+        async def dir_worker(worker_id: int):
+            while True:
+                try:
+                    current_cid, current_virtual_path = await asyncio.wait_for(
+                        dir_queue.get(), timeout=3.0
+                    )
+                except asyncio.TimeoutError:
+                    break
+
+                async with visited_lock:
+                    if current_cid in visited_cids:
+                        dir_queue.task_done()
+                        continue
+                    visited_cids.add(current_cid)
+
+                try:
+                    offset = 0
+                    page_size = settings.CRAWLER_PAGE_SIZE
+
+                    while True:
+                        snap_data = await self._fetch_snap_page(
+                            http_pool=http_pool,
+                            proxy_mgr=proxy_mgr,
+                            pacer=pacer,
+                            share_code=share_code,
+                            receive_code=effective_pwd,
+                            cid=current_cid,
+                            offset=offset,
+                            limit=page_size,
                         )
-                    except asyncio.TimeoutError:
-                        break
-
-                    async with visited_lock:
-                        if current_cid in visited_cids:
-                            dir_queue.task_done()
-                            continue
-                        visited_cids.add(current_cid)
-
-                    try:
-                        offset = 0
-                        page_size = settings.CRAWLER_PAGE_SIZE
-
-                        while True:
-                            snap_data = await self._fetch_snap_page(
-                                client=client,
-                                pacer=pacer,
-                                share_code=share_code,
-                                receive_code=effective_pwd,
-                                cid=current_cid,
-                                offset=offset,
-                                limit=page_size,
-                            )
 
                             data_payload = snap_data.get("data", {})
 
@@ -482,6 +551,9 @@ class Crawler115Engine:
                 logger.exception(f"Unexpected error crawling {share_code}: {exc}")
                 await db.rollback()
                 raise ShareCrawlerError(f"Crawl failed: {exc}") from exc
+
+            finally:
+                await http_pool.close_all()
 
     async def _bulk_upsert_files(self, db: AsyncSession, records: List[Dict[str, Any]]) -> None:
         if not records:

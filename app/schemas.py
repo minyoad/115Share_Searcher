@@ -249,3 +249,19 @@ class ReportShareResponse(BaseModel):
     share_code: str
     status: int
     message: str
+
+
+class ProxyTestRequest(BaseModel):
+    """代理连通性测试请求"""
+    proxy_url: Optional[str] = Field(default=None, description="测试的代理URL，留空则测试当前可用代理")
+
+
+class ProxyConfigUpdateRequest(BaseModel):
+    """代理运行时配置热更新请求"""
+    mode: Optional[str] = Field(default=None, description="OFF, STATIC, POOL_API, CUSTOM_LIST")
+    proxy_url: Optional[str] = Field(default=None, description="单个静态代理URL")
+    proxy_pool_api: Optional[str] = Field(default=None, description="动态代理池API")
+    proxy_pool_list: Optional[str] = Field(default=None, description="多静态代理逗号/换行列表")
+    rotation_strategy: Optional[str] = Field(default=None, description="rotate_on_error, rotate_per_request, round_robin")
+    refresh_interval: Optional[int] = Field(default=None, description="刷新间隔(秒)")
+

@@ -54,6 +54,11 @@ services:
       - CRAWLER_COOKIE=${CRAWLER_COOKIE:-}
       - CRAWLER_RATE_MIN=0.3
       - CRAWLER_RATE_MAX=0.8
+      - PROXY_MODE=${PROXY_MODE:-OFF}
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_POOL_API=${PROXY_POOL_API:-}
+      - PROXY_POOL_LIST=${PROXY_POOL_LIST:-}
+      - PROXY_ROTATION_STRATEGY=${PROXY_ROTATION_STRATEGY:-rotate_on_error}
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,6 +80,11 @@ services:
       - CRAWLER_COOKIE=${CRAWLER_COOKIE:-}
       - CRAWLER_RATE_MIN=0.3
       - CRAWLER_RATE_MAX=0.8
+      - PROXY_MODE=${PROXY_MODE:-OFF}
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_POOL_API=${PROXY_POOL_API:-}
+      - PROXY_POOL_LIST=${PROXY_POOL_LIST:-}
+      - PROXY_ROTATION_STRATEGY=${PROXY_ROTATION_STRATEGY:-rotate_on_error}
       - CONCURRENCY=4
     depends_on:
       postgres:

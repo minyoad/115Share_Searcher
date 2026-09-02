@@ -23,6 +23,7 @@ import { CrawlerVisualizer } from './components/CrawlerVisualizer';
 import { ImporterView } from './components/BatchImportModal';
 import { DirectoryTreeView } from './components/DirectoryTreeView';
 import { ApiTester } from './components/ApiTester';
+import { ProxyManagerView } from './components/ProxyManagerView';
 import { ActiveTab, FileRecord, ShareRecord } from './types';
 
 export default function App() {
@@ -178,6 +179,19 @@ export default function App() {
               </button>
 
               <button
+                id="nav-proxy-tab"
+                onClick={() => setActiveTab('proxy')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  activeTab === 'proxy'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                代理池矩阵
+              </button>
+
+              <button
                 id="nav-tree-tab"
                 onClick={() => setActiveTab('tree')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
@@ -250,6 +264,8 @@ export default function App() {
         )}
 
         {activeTab === 'crawler' && <CrawlerVisualizer />}
+        
+        {activeTab === 'proxy' && <ProxyManagerView />}
 
         {activeTab === 'tree' && (
           <DirectoryTreeView

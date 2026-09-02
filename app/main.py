@@ -14,11 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db, init_db
 from app.models import File, Share, ShareStatus
+from app.proxy import ProxyManager
 from app.schemas import (
     BatchImportRequest,
     BatchImportTaskResult,
     DirectoryListResponse,
     FileTreeNode,
+    ProxyConfigUpdateRequest,
+    ProxyTestRequest,
     ReportShareRequest,
     ReportShareResponse,
     SearchResponse,
@@ -42,6 +45,9 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for DB schema init and clean teardown"""
     logger.info("Application starting up... Initializing DB...")
     await init_db()
+    # Initialize Proxy Subsystem
+    proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.initialize()
     yield
     logger.info("Application shutting down...")
 
@@ -529,3 +535,95 @@ async def report_invalid_share(
         status=new_status,
         message="已成功标记该分享为失效状态，后续检索将自动过滤。"
     )
+
+
+# ---------------------------------------------------------
+# Proxy Pool Management & Diagnostic Endpoints
+# ---------------------------------------------------------
+
+@app.get(
+    "/api/v1/system/proxy",
+    summary="获取当前代理池状态与诊断指标",
+)
+async def get_proxy_status():
+    """
+    获取代理池当前工作模式、节点总数、可用数、405封禁隔离数、成功/失败指标及样例节点
+    """
+    proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.initialize()
+    return proxy_mgr.get_status()
+
+
+@app.post(
+    "/api/v1/system/proxy/test",
+    summary="测试指定代理或当前可用代理连通性",
+)
+async def test_proxy_connectivity(payload: Optional[ProxyTestRequest] = None):
+    """
+    向 115 端点发起探测请求，评估延迟、HTTP状态码及是否被 115 WAF 405 拦截
+    """
+    proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.initialize()
+    test_target = payload.proxy_url if payload else None
+    return await proxy_mgr.test_proxy(test_target)
+
+
+@app.post(
+    "/api/v1/system/proxy/refresh",
+    summary="手动触发刷新动态代理池 API",
+)
+async def refresh_proxy_pool():
+    """
+    强制立即从配置的代理池 API 拉取最新 IP 节点
+    """
+    proxy_mgr = ProxyManager.get_instance()
+    await proxy_mgr.initialize()
+    count = await proxy_mgr.refresh_pool()
+    return {
+        "status": "success",
+        "message": f"代理池已刷新，当前可用节点总数: {count}",
+        "total_proxies": count,
+    }
+
+
+@app.post(
+    "/api/v1/system/proxy/config",
+    summary="热更新代理池运行配置",
+)
+async def update_proxy_config(payload: ProxyConfigUpdateRequest):
+    """
+    动态修改代理模式 (OFF, STATIC, POOL_API, CUSTOM_LIST) 与 API 地址，无需重启服务
+    """
+    proxy_mgr = ProxyManager.get_instance()
+
+    if payload.mode is not None:
+        settings.PROXY_MODE = payload.mode.upper()
+        proxy_mgr.mode = settings.PROXY_MODE
+
+    if payload.proxy_url is not None:
+        settings.PROXY_URL = payload.proxy_url
+
+    if payload.proxy_pool_api is not None:
+        settings.PROXY_POOL_API = payload.proxy_pool_api
+
+    if payload.proxy_pool_list is not None:
+        settings.PROXY_POOL_LIST = payload.proxy_pool_list
+
+    if payload.rotation_strategy is not None:
+        settings.PROXY_ROTATION_STRATEGY = payload.rotation_strategy
+
+    if payload.refresh_interval is not None:
+        settings.PROXY_POOL_REFRESH_INTERVAL = payload.refresh_interval
+
+    # 重新初始化代理管理器
+    proxy_mgr._initialized = False
+    proxy_mgr.pool.clear()
+    proxy_mgr._current_sticky_proxy = None
+    await proxy_mgr.initialize()
+
+    return {
+        "status": "success",
+        "message": "代理配置已热更新并生效",
+        "current_status": proxy_mgr.get_status(),
+    }
+

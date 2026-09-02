@@ -50,6 +50,16 @@
           🌳 层级目录树
         </button>
         <button 
+          @click="switchToProxy()"
+          :class="activeTab === 'proxy' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
+          class="px-3.5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5 relative"
+        >
+          🛡️ 代理池配置
+          <span v-if="proxyStatus && proxyStatus.banned_405_count > 0" class="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-white font-bold">
+            {{ proxyStatus.banned_405_count }}
+          </span>
+        </button>
+        <button 
           @click="activeTab = 'import'"
           :class="activeTab === 'import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
           class="px-3.5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
@@ -728,6 +738,364 @@
       </div>
     </section>
 
+    <!-- TAB 5: Proxy Pool Management -->
+    <section v-if="activeTab === 'proxy'" class="space-y-6">
+      <!-- Top Overview Banner -->
+      <div class="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4 border border-indigo-900/50">
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="px-2.5 py-1 rounded-md text-xs font-semibold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+              🛡️ 115 Anti-WAF 代理中继矩阵
+            </span>
+            <span :class="proxyStatus && proxyStatus.mode === 'OFF' ? 'bg-slate-700 text-slate-300' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'" class="px-2 py-0.5 rounded-full text-xs font-medium">
+              {{ proxyStatus ? (proxyStatus.mode === 'OFF' ? '直连模式 (OFF)' : `已启用 (${proxyStatus.mode})`) : '加载中...' }}
+            </span>
+          </div>
+          <h2 class="text-xl font-bold tracking-tight">分布式代理池与 405 智能熔断调度</h2>
+          <p class="text-sm text-slate-300">
+            支持 HTTP / SOCKS5 代理轮换、405 边缘防火墙自动隔离切换与动态 API IP 池同步，确保十万级文件抓取不中断。
+          </p>
+        </div>
+
+        <div class="flex items-center gap-3 self-start md:self-auto">
+          <button
+            @click="refreshProxyPool()"
+            :disabled="proxyLoading"
+            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition flex items-center gap-2 shadow-sm disabled:opacity-50"
+          >
+            <span>{{ proxyLoading ? '刷新中...' : '🔄 刷新代理池' }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Proxy Metrics Cards -->
+      <div v-if="proxyStatus" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-medium text-slate-500 mb-1">运行模式</div>
+          <div class="text-base font-bold text-slate-900 truncate">
+            {{ proxyStatus.mode === 'OFF' ? '直连 (OFF)' : proxyStatus.mode }}
+          </div>
+          <div class="text-xs text-indigo-600 mt-1 font-mono">{{ proxyStatus.rotation_strategy }}</div>
+        </div>
+
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-medium text-slate-500 mb-1">节点总数</div>
+          <div class="text-2xl font-bold text-slate-900">{{ proxyStatus.total_proxies }}</div>
+          <div class="text-xs text-slate-400 mt-1">池内注册 IP</div>
+        </div>
+
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-medium text-slate-500 mb-1">可用节点</div>
+          <div class="text-2xl font-bold text-emerald-600">{{ proxyStatus.available_proxies }}</div>
+          <div class="text-xs text-emerald-600 mt-1">健康待命中</div>
+        </div>
+
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-medium text-slate-500 mb-1">405 封禁隔离</div>
+          <div class="text-2xl font-bold" :class="proxyStatus.banned_405_count > 0 ? 'text-amber-600' : 'text-slate-700'">
+            {{ proxyStatus.banned_405_count }}
+          </div>
+          <div class="text-xs text-amber-600 mt-1">自动隔离冷却</div>
+        </div>
+
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-medium text-slate-500 mb-1">请求成功率</div>
+          <div class="text-2xl font-bold text-blue-600">
+            {{ proxyStatus.total_success_requests + proxyStatus.total_failed_requests > 0 
+                ? ((proxyStatus.total_success_requests / (proxyStatus.total_success_requests + proxyStatus.total_failed_requests)) * 100).toFixed(1) + '%' 
+                : '100%' }}
+          </div>
+          <div class="text-xs text-slate-400 mt-1">{{ proxyStatus.total_success_requests }} 成功</div>
+        </div>
+
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-medium text-slate-500 mb-1">当前承载代理</div>
+          <div class="text-xs font-mono font-semibold text-slate-800 truncate" :title="proxyStatus.current_sticky_proxy || '直连'">
+            {{ proxyStatus.current_sticky_proxy ? proxyStatus.current_sticky_proxy.replace(/https?:\/\//, '') : '直连 (DIRECT)' }}
+          </div>
+          <div class="text-xs text-slate-400 mt-1">Sticky IP</div>
+        </div>
+      </div>
+
+      <!-- Connectivity Test Bar -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-amber-500 font-bold">⚡</span>
+            <h3 class="text-sm font-bold text-slate-900">115 Snap API 连通性与 WAF 探测诊断</h3>
+          </div>
+          <span class="text-xs text-slate-400">测试端点: https://webapi.115.com/share/snap</span>
+        </div>
+
+        <div class="flex flex-col sm:flex-row gap-3">
+          <div class="relative flex-1">
+            <input
+              v-model="proxyTestUrl"
+              type="text"
+              placeholder="输入待测试代理 (例如 http://127.0.0.1:7890 或 socks5://ip:port)，留空则测试当前代理"
+              class="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-mono"
+            />
+          </div>
+          <button
+            @click="testProxy()"
+            :disabled="proxyTesting"
+            class="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-xl transition flex items-center justify-center gap-2 shrink-0 disabled:opacity-50"
+          >
+            <span>{{ proxyTesting ? '探测中...' : '发起探测 🚀' }}</span>
+          </button>
+        </div>
+
+        <!-- Diagnostic Output -->
+        <div v-if="proxyTestResult" :class="[
+          'p-4 rounded-xl text-sm border flex items-start gap-3 transition-all',
+          proxyTestResult.status === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' :
+          proxyTestResult.status === 'waf_405_blocked' ? 'bg-amber-50 border-amber-200 text-amber-900' :
+          'bg-red-50 border-red-200 text-red-900'
+        ]">
+          <div class="space-y-1 flex-1">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <span class="font-semibold font-mono">{{ proxyTestResult.proxy_url }}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs px-2 py-0.5 rounded bg-white/80 border font-mono">
+                  延迟: {{ proxyTestResult.latency_ms }} ms
+                </span>
+                <span class="text-xs px-2 py-0.5 rounded bg-white/80 border font-mono">
+                  HTTP {{ proxyTestResult.http_status || 'ERR' }}
+                </span>
+              </div>
+            </div>
+            <div class="text-xs">
+              <span v-if="proxyTestResult.status === 'success'">🟢 连通正常！115 API 返回成功响应，代理未受 WAF 405 拦截。</span>
+              <span v-else-if="proxyTestResult.status === 'waf_405_blocked'">⚠️ 115 WAF 返回 405 拦截！该 IP 已被 115 边缘防火墙限速或封禁，系统已自动将其隔离。</span>
+              <span v-else-if="proxyTestResult.status === 'connect_failed'">❌ 代理连接失败: {{ proxyTestResult.error }}</span>
+              <span v-else>❌ 异常响应: {{ proxyTestResult.error }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Content: Nodes Table + Hot Update Form -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Nodes Table -->
+        <div class="lg:col-span-7 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-base font-bold text-slate-900">池内代理节点状态</h3>
+              <p class="text-xs text-slate-500">最近活跃与延迟指标</p>
+            </div>
+            <span class="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-medium">
+              共 {{ proxyStatus && proxyStatus.sample_nodes ? proxyStatus.sample_nodes.length : 0 }} 个监控节点
+            </span>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="border-b border-slate-200 bg-slate-50/80 text-slate-500">
+                  <th class="py-2.5 px-3 font-semibold rounded-l-lg">代理地址 / 协议</th>
+                  <th class="py-2.5 px-3 font-semibold">健康状态</th>
+                  <th class="py-2.5 px-3 font-semibold">响应延迟</th>
+                  <th class="py-2.5 px-3 font-semibold">成功/失败</th>
+                  <th class="py-2.5 px-3 font-semibold text-right rounded-r-lg">操作</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <template v-if="proxyStatus && proxyStatus.sample_nodes && proxyStatus.sample_nodes.length > 0">
+                  <tr v-for="(node, idx) in proxyStatus.sample_nodes" :key="idx" class="hover:bg-slate-50/80 transition">
+                    <td class="py-3 px-3">
+                      <div class="font-mono font-medium text-slate-900 text-xs truncate max-w-[200px]" :title="node.url">
+                        {{ node.url }}
+                      </div>
+                      <span class="inline-block px-1.5 py-0.5 text-[10px] rounded bg-slate-100 text-slate-600 uppercase font-mono mt-0.5">
+                        {{ node.protocol }}
+                      </span>
+                    </td>
+                    <td class="py-3 px-3">
+                      <span v-if="node.is_banned_405" class="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full text-[11px] font-medium border border-amber-200">
+                        ⚠️ 405隔离 ({{ node.banned_remaining_sec }}s)
+                      </span>
+                      <span v-else-if="node.is_available" class="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[11px] font-medium border border-emerald-200">
+                        🟢 正常待命
+                      </span>
+                      <span v-else class="inline-flex items-center gap-1 text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full text-[11px] font-medium border border-rose-200">
+                        ❌ 异常超限
+                      </span>
+                    </td>
+                    <td class="py-3 px-3 font-mono">
+                      <span :class="node.last_latency_ms < 150 ? 'text-emerald-600 font-semibold' : 'text-slate-600'">
+                        {{ node.last_latency_ms > 0 ? node.last_latency_ms + ' ms' : '-' }}
+                      </span>
+                    </td>
+                    <td class="py-3 px-3 font-mono text-slate-600">
+                      <span class="text-emerald-600">{{ node.success_count }}</span>
+                      /
+                      <span :class="node.failure_count > 0 ? 'text-rose-500' : 'text-slate-400'">
+                        {{ node.failure_count }}
+                      </span>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                      <button
+                        @click="proxyTestUrl = node.url; testProxy();"
+                        class="text-xs text-indigo-600 hover:text-indigo-800 font-medium hover:underline"
+                      >
+                        测速
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+                <tr v-else>
+                  <td colSpan="5" class="py-8 text-center text-slate-400 text-xs">
+                    当前未加载节点或为直连模式
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="text-xs text-slate-400 flex items-center justify-between pt-2 border-t border-slate-100">
+            <span>上次同步时间: {{ proxyStatus ? proxyStatus.last_refresh_time : '刚刚' }}</span>
+            <span>自动刷新周期: {{ proxyStatus ? proxyStatus.refresh_interval_sec : 45 }} 秒</span>
+          </div>
+        </div>
+
+        <!-- Hot Update Config Form -->
+        <div class="lg:col-span-5 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="text-indigo-600 font-bold">⚙️</span>
+              <h3 class="text-base font-bold text-slate-900">代理池运行配置热更新</h3>
+            </div>
+            <span v-if="proxySaveSuccess" class="text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full font-medium">
+              ✅ 已生效
+            </span>
+          </div>
+
+          <form @submit.prevent="saveProxyConfig()" class="space-y-4 text-xs">
+            <div>
+              <label class="block font-semibold text-slate-700 mb-1.5">代理工作模式 (PROXY_MODE)</label>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  v-for="m in [
+                    { id: 'OFF', label: 'OFF (直连无代理)' },
+                    { id: 'POOL_API', label: 'POOL_API (动态代理池)' },
+                    { id: 'STATIC', label: 'STATIC (单静态代理)' },
+                    { id: 'CUSTOM_LIST', label: 'CUSTOM_LIST (多静态列表)' }
+                  ]"
+                  :key="m.id"
+                  type="button"
+                  @click="proxyForm.mode = m.id"
+                  :class="proxyForm.mode === m.id ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 font-bold' : 'border-slate-200 hover:bg-slate-50 text-slate-700'"
+                  class="p-2.5 rounded-xl border text-left font-medium transition"
+                >
+                  {{ m.label }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="proxyForm.mode === 'POOL_API'" class="space-y-2">
+              <div>
+                <label class="block font-semibold text-slate-700 mb-1">动态代理池 API (PROXY_POOL_API)</label>
+                <input
+                  v-model="proxyForm.proxy_pool_api"
+                  type="text"
+                  placeholder="例如 http://127.0.0.1:5010/get_all/ 或公共免费 API"
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                />
+              </div>
+
+              <!-- Preset public free proxy APIs -->
+              <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                <div class="text-[11px] font-semibold text-slate-600 mb-1.5 flex items-center justify-between">
+                  <span>💡 一键填入常用现成免费代理池源：</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    @click="proxyForm.proxy_pool_api = 'http://127.0.0.1:5010/get_all/'"
+                    class="px-2 py-1 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 rounded-lg text-[10px] font-mono transition"
+                  >
+                    自建 ProxyPool 本地源 (/get_all/)
+                  </button>
+                  <button
+                    type="button"
+                    @click="proxyForm.proxy_pool_api = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=8000&country=all&ssl=all&anonymity=elite'"
+                    class="px-2 py-1 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 rounded-lg text-[10px] font-mono transition"
+                  >
+                    ProxyScrape 高匿免费源
+                  </button>
+                  <button
+                    type="button"
+                    @click="proxyForm.proxy_pool_api = 'https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt'"
+                    class="px-2 py-1 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 rounded-lg text-[10px] font-mono transition"
+                  >
+                    TheSpeedX HTTP 免费列表
+                  </button>
+                  <button
+                    type="button"
+                    @click="proxyForm.proxy_pool_api = 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt'"
+                    class="px-2 py-1 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 rounded-lg text-[10px] font-mono transition"
+                  >
+                    Monosans 实时验证源
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="proxyForm.mode === 'STATIC'">
+              <label class="block font-semibold text-slate-700 mb-1">单静态代理 URL (PROXY_URL)</label>
+              <input
+                v-model="proxyForm.proxy_url"
+                type="text"
+                placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+              />
+            </div>
+
+            <div v-if="proxyForm.mode === 'CUSTOM_LIST'">
+              <label class="block font-semibold text-slate-700 mb-1">静态代理列表 (每行一个)</label>
+              <textarea
+                v-model="proxyForm.proxy_pool_list"
+                rows="3"
+                placeholder="http://1.2.3.4:8080&#10;socks5://2.3.4.5:1080"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+              ></textarea>
+            </div>
+
+            <div>
+              <label class="block font-semibold text-slate-700 mb-1.5">代理轮换调度算法</label>
+              <select
+                v-model="proxyForm.rotation_strategy"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+              >
+                <option value="rotate_on_error">rotate_on_error (同一目录复用，遇错或 405 立即换新 IP)</option>
+                <option value="rotate_per_request">rotate_per_request (单次 Snap 请求单次换 IP，高离散)</option>
+                <option value="round_robin">round_robin (Round-Robin 顺序公平轮询)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block font-semibold text-slate-700 mb-1">API 自动拉取刷新间隔 (秒)</label>
+              <input
+                v-model.number="proxyForm.refresh_interval"
+                type="number"
+                min="10"
+                max="600"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-mono"
+              />
+            </div>
+
+            <button
+              type="submit"
+              class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition shadow-sm text-xs"
+            >
+              保存并热重载生效 (无需重启 Docker)
+            </button>
+          </form>
+        </div>
+      </div>
+    </section>
+
     <!-- Toast Notification -->
     <div 
       v-if="toastMessage" 
@@ -779,6 +1147,118 @@
         const treeData = ref(null);
         const treeBreadcrumbs = ref([]);
         const treeFilterKeyword = ref('');
+
+        // Proxy management reactive state
+        const proxyStatus = ref(null);
+        const proxyLoading = ref(false);
+        const proxyTestUrl = ref('');
+        const proxyTesting = ref(false);
+        const proxyTestResult = ref(null);
+        const proxySaveSuccess = ref(false);
+        const proxyForm = ref({
+          mode: 'OFF',
+          proxy_url: '',
+          proxy_pool_api: '',
+          proxy_pool_list: '',
+          rotation_strategy: 'rotate_on_error',
+          refresh_interval: 45
+        });
+
+        const fetchProxyStatus = async () => {
+          try {
+            proxyLoading.value = true;
+            const res = await fetch('/api/v1/system/proxy');
+            if (res.ok) {
+              const data = await res.json();
+              proxyStatus.value = data;
+              proxyForm.value.mode = data.mode || 'OFF';
+              proxyForm.value.rotation_strategy = data.rotation_strategy || 'rotate_on_error';
+              proxyForm.value.refresh_interval = data.refresh_interval_sec || 45;
+              if (data.api_endpoint) proxyForm.value.proxy_pool_api = data.api_endpoint;
+            }
+          } catch (err) {
+            // Ignore if offline
+          } finally {
+            proxyLoading.value = false;
+          }
+        };
+
+        const testProxy = async () => {
+          proxyTesting.value = true;
+          proxyTestResult.value = null;
+          try {
+            const res = await fetch('/api/v1/system/proxy/test', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ proxy_url: proxyTestUrl.value.trim() || undefined })
+            });
+            if (res.ok) {
+              proxyTestResult.value = await res.json();
+            } else {
+              proxyTestResult.value = {
+                proxy_url: proxyTestUrl.value || '当前默认代理',
+                status: 'error',
+                error: `HTTP ${res.status} 请求失败`
+              };
+            }
+          } catch (err) {
+            proxyTestResult.value = {
+              proxy_url: proxyTestUrl.value || '当前默认代理',
+              status: 'connect_failed',
+              error: err.message
+            };
+          } finally {
+            proxyTesting.value = false;
+          }
+        };
+
+        const refreshProxyPool = async () => {
+          proxyLoading.value = true;
+          try {
+            const res = await fetch('/api/v1/system/proxy/refresh', { method: 'POST' });
+            if (res.ok) {
+              const data = await res.json();
+              showToast(data.message || '代理池刷新成功');
+            }
+            await fetchProxyStatus();
+          } catch (err) {
+            showToast('刷新代理池失败: ' + err.message);
+          } finally {
+            proxyLoading.value = false;
+          }
+        };
+
+        const saveProxyConfig = async () => {
+          proxySaveSuccess.value = false;
+          try {
+            const res = await fetch('/api/v1/system/proxy/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                mode: proxyForm.value.mode,
+                proxy_url: proxyForm.value.proxy_url,
+                proxy_pool_api: proxyForm.value.proxy_pool_api,
+                proxy_pool_list: proxyForm.value.proxy_pool_list,
+                rotation_strategy: proxyForm.value.rotation_strategy,
+                refresh_interval: proxyForm.value.refresh_interval
+              })
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data.current_status) proxyStatus.value = data.current_status;
+              proxySaveSuccess.value = true;
+              showToast('代理配置已热更新生效！');
+              setTimeout(() => { proxySaveSuccess.value = false; }, 3000);
+            }
+          } catch (err) {
+            showToast('保存配置异常: ' + err.message);
+          }
+        };
+
+        const switchToProxy = () => {
+          activeTab.value = 'proxy';
+          fetchProxyStatus();
+        };
 
         const filteredTreeItems = computed(() => {
           if (!treeData.value || !treeData.value.items) return [];
@@ -1027,6 +1507,7 @@
 
         onMounted(() => {
           loadShares(1);
+          fetchProxyStatus();
           // Auto poll if on tasks tab or if pending tasks exist
           pollTimer = setInterval(() => {
             if (activeTab.value === 'tasks' || (sharesStats.value && sharesStats.value.pending_shares > 0)) {
@@ -1070,6 +1551,18 @@
           treeBreadcrumbs,
           treeFilterKeyword,
           filteredTreeItems,
+          proxyStatus,
+          proxyLoading,
+          proxyTestUrl,
+          proxyTesting,
+          proxyTestResult,
+          proxySaveSuccess,
+          proxyForm,
+          fetchProxyStatus,
+          testProxy,
+          refreshProxyPool,
+          saveProxyConfig,
+          switchToProxy,
           loadTree,
           openTree,
           onTreeShareSelectChange,
