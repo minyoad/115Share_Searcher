@@ -23,6 +23,9 @@ from app.schemas import (
     ReportShareResponse,
     SearchResponse,
     SearchResultItem,
+    ShareInfo,
+    ShareListResponse,
+    TriggerCrawlResponse,
     format_size,
 )
 from app.worker import enqueue_crawl_task
@@ -84,6 +87,146 @@ async def health_check():
     }
 
 
+@app.get(
+    "/api/v1/shares",
+    response_model=ShareListResponse,
+    summary="获取已提交分享列表及抓取状态监控",
+)
+async def list_shares(
+    keyword: Optional[str] = Query(None, description="搜索分享代码或标题"),
+    status: Optional[int] = Query(None, description="状态筛选: 0=PENDING(抓取中), 1=ACTIVE(完成), 2=EXPIRED(失效), 3=BANNED(封禁)"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取系统中所有收录的 115 分享链接、抓取进度状态、文件统计及全局概览
+    """
+    conditions = []
+    if keyword and keyword.strip():
+        kw = keyword.strip()
+        conditions.append((Share.share_code.ilike(f"%{kw}%")) | (Share.title.ilike(f"%{kw}%")))
+    if status is not None:
+        conditions.append(Share.status == status)
+
+    # Global Stats
+    total_shares_count = (await db.execute(select(func.count(Share.id)))).scalar() or 0
+    active_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0
+    pending_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0
+    expired_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0
+    banned_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0
+
+    total_files_sum = (await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0
+    total_size_sum = (await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0
+
+    stats_payload = {
+        "total_shares": total_shares_count,
+        "active_shares": active_shares_count,
+        "pending_shares": pending_shares_count,
+        "expired_shares": expired_shares_count,
+        "banned_shares": banned_shares_count,
+        "total_files": total_files_sum,
+        "total_size": total_size_sum,
+        "total_size_formatted": format_size(total_size_sum),
+    }
+
+    # Count query for current filter
+    count_stmt = select(func.count(Share.id))
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+    filtered_total = (await db.execute(count_stmt)).scalar() or 0
+
+    # Data query
+    offset = (page - 1) * page_size
+    data_stmt = (
+        select(Share)
+        .order_by(Share.id.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    if conditions:
+        data_stmt = data_stmt.where(*conditions)
+
+    share_rows = (await db.execute(data_stmt)).scalars().all()
+
+    items = [
+        ShareInfo(
+            id=s.id,
+            share_code=s.share_code,
+            receive_code=s.receive_code or "",
+            title=s.title or f"115 分享 ({s.share_code})",
+            file_count=s.file_count,
+            folder_count=s.folder_count,
+            total_size=s.total_size,
+            status=s.status,
+            last_crawled_at=s.last_crawled_at,
+            created_at=s.created_at,
+        )
+        for s in share_rows
+    ]
+
+    total_pages = math.ceil(filtered_total / page_size) if filtered_total > 0 else 0
+
+    return ShareListResponse(
+        total=filtered_total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        stats=stats_payload,
+        items=items,
+    )
+
+
+@app.post(
+    "/api/v1/shares/{share_code}/crawl",
+    response_model=TriggerCrawlResponse,
+    summary="手动开始或重新抓取指定分享链接",
+)
+async def trigger_share_crawl(
+    share_code: str,
+    receive_code: Optional[str] = Query(None, description="可选更新提取码"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    手动触发或重新开始爬取指定的 115 分享（无论当前是未完成、失败还是需强制刷新）
+    """
+    clean_code = share_code.strip()
+    stmt = select(Share).where(Share.share_code == clean_code)
+    res = await db.execute(stmt)
+    share_obj = res.scalar_one_or_none()
+
+    effective_pwd = receive_code or ""
+    if share_obj:
+        if receive_code:
+            share_obj.receive_code = receive_code
+        effective_pwd = share_obj.receive_code or ""
+        share_obj.status = ShareStatus.PENDING.value
+        await db.commit()
+    else:
+        # Create new record in PENDING status
+        share_obj = Share(
+            share_code=clean_code,
+            receive_code=effective_pwd,
+            title=f"115 分享 ({clean_code})",
+            status=ShareStatus.PENDING.value,
+        )
+        db.add(share_obj)
+        await db.commit()
+        await db.refresh(share_obj)
+
+    task_id = await enqueue_crawl_task(
+        share_code=clean_code,
+        receive_code=effective_pwd,
+    )
+
+    return TriggerCrawlResponse(
+        share_code=clean_code,
+        task_id=task_id,
+        status="QUEUED",
+        message=f"已成功触发爬取任务 (Task ID: {task_id})，Worker 将立即开始遍历抓取！"
+    )
+
+
 @app.post(
     "/api/v1/shares/batch-import",
     response_model=BatchImportTaskResult,
@@ -105,20 +248,37 @@ async def batch_import_shares(
         if not item.share_code:
             continue
 
+        clean_code = item.share_code.strip()
+        pwd = (item.receive_code or "").strip()
+
         # Check existing share in DB
-        stmt = select(Share).where(Share.share_code == item.share_code)
+        stmt = select(Share).where(Share.share_code == clean_code)
         res = await db.execute(stmt)
         existing = res.scalar_one_or_none()
 
-        if existing and existing.status == ShareStatus.ACTIVE.value:
-            # If already active and has files, skip re-crawling unless forced
-            duplicate_count += 1
-            continue
+        if existing:
+            if existing.status == ShareStatus.ACTIVE.value and existing.file_count > 0 and not payload.force_crawl:
+                duplicate_count += 1
+                continue
+            else:
+                existing.status = ShareStatus.PENDING.value
+                if pwd:
+                    existing.receive_code = pwd
+                await db.commit()
+        else:
+            new_share = Share(
+                share_code=clean_code,
+                receive_code=pwd,
+                title=f"115 分享 ({clean_code})",
+                status=ShareStatus.PENDING.value,
+            )
+            db.add(new_share)
+            await db.commit()
 
         # Enqueue background crawl task
         task_id = await enqueue_crawl_task(
-            share_code=item.share_code,
-            receive_code=item.receive_code or ""
+            share_code=clean_code,
+            receive_code=pwd,
         )
         task_ids.append(task_id)
         queued_count += 1
@@ -128,7 +288,7 @@ async def batch_import_shares(
         tasks_queued=queued_count,
         ignored_duplicates=duplicate_count,
         task_ids=task_ids,
-        message=f"已成功接收 {len(payload.shares)} 条分享链接，新增进入抓取队列 {queued_count} 条。"
+        message=f"已成功接收 {len(payload.shares)} 条分享链接，已创建/更新并在后台队列开始抓取 {queued_count} 条。"
     )
 
 

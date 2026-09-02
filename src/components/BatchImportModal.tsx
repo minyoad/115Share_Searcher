@@ -13,30 +13,51 @@ import { ShareRecord, FileRecord } from '../types';
 
 interface ImporterViewProps {
   onImportSuccess: (newShare: ShareRecord, newFiles: FileRecord[]) => void;
+  onNavigateToTasks?: () => void;
 }
 
-const URL_REGEX = /(?:https?:\/\/)?(?:115\.com\/s\/|anxia\.com\/s\/)?([a-zA-Z0-9_-]{8,64})(?:[?&]password=([a-zA-Z0-9]{4,32})|#([a-zA-Z0-9]{4,32}))?/i;
+const URL_REGEX = /(?:https?:\/\/)?(?:[a-zA-Z0-9.-]+\.)?(?:115(?:cdn)?|anxia)\.com\/s\/([a-zA-Z0-9_-]{6,64})|([a-zA-Z0-9_-]{6,64})(?:[?&#](?:(?:password|pwd|receive_code)=)?([a-zA-Z0-9]{2,32}))?/i;
 
-export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess }) => {
+function parseLine(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  
+  // Extract share code
+  const codeMatch = trimmed.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9.-]+\.)?(?:115(?:cdn)?|anxia)\.com\/s\/([a-zA-Z0-9_-]{6,64})/i)
+                 || trimmed.match(/\/s\/([a-zA-Z0-9_-]{6,64})/i)
+                 || trimmed.match(/^([a-zA-Z0-9_-]{6,64})/i);
+  
+  if (!codeMatch || !codeMatch[1]) return null;
+  const shareCode = codeMatch[1];
+  
+  // Extract password
+  let receiveCode = '';
+  const pwdMatch = trimmed.match(/(?:[?&](?:password|pwd|receive_code)=([a-zA-Z0-9]+)|#([a-zA-Z0-9]+))/i);
+  if (pwdMatch) {
+    receiveCode = pwdMatch[1] || pwdMatch[2] || '';
+  }
+  
+  return {
+    raw: trimmed,
+    valid: true,
+    shareCode,
+    receiveCode,
+  };
+}
+
+export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess, onNavigateToTasks }) => {
   const [inputText, setInputText] = useState(
-    `https://115.com/s/sw34kcyberpunk?password=cp77\nhttps://115.com/s/sw3mathclassical#mt24\nsw3deeplearning2024#ai99`
+    `https://115cdn.com/s/swnsdrk3h2m?password=p783\nhttps://115cdn.com/s/sw6tcot3hbe?password=e9d7\nhttps://115.com/s/sw34kcyberpunk?password=cp77`
   );
   const [isProcessing, setIsProcessing] = useState(false);
   const [successLogs, setSuccessLogs] = useState<string[]>([]);
 
-  // Parse lines using regex
+  // Parse lines
   const parsedItems = useMemo(() => {
     const lines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
     return lines.map(line => {
-      const match = line.match(URL_REGEX);
-      if (match && match[1]) {
-        return {
-          raw: line,
-          valid: true,
-          shareCode: match[1],
-          receiveCode: match[2] || match[3] || '',
-        };
-      }
+      const parsed = parseLine(line);
+      if (parsed) return parsed;
       return {
         raw: line,
         valid: false,
@@ -141,6 +162,25 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess }) =
           </p>
         </div>
 
+        {/* Preset quick buttons */}
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          <span className="text-slate-400 font-medium">快速载入示例:</span>
+          <button
+            type="button"
+            onClick={() => setInputText(`https://115cdn.com/s/swnsdrk3h2m?password=p783\nhttps://115cdn.com/s/sw6tcot3hbe?password=e9d7`)}
+            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition font-mono text-[11px]"
+          >
+            载入 115cdn 链接
+          </button>
+          <button
+            type="button"
+            onClick={() => setInputText(`https://115.com/s/sw34kcyberpunk?password=cp77\nhttps://115.com/s/sw3mathclassical#mt24`)}
+            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition font-mono text-[11px]"
+          >
+            载入 115 官方链接
+          </button>
+        </div>
+
         {/* Input Textarea */}
         <div className="space-y-2">
           <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -224,7 +264,7 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess }) =
 
         {/* Success logs */}
         {successLogs.length > 0 && (
-          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs space-y-1">
+          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs space-y-2">
             <p className="font-bold flex items-center gap-1.5">
               <CheckCircle className="w-4 h-4 text-emerald-600" />
               后台 Worker 异步抓取并索引成功！
@@ -232,9 +272,17 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess }) =
             {successLogs.map((log, i) => (
               <p key={i} className="font-mono text-emerald-700">• {log}</p>
             ))}
-            <p className="pt-1 text-slate-600 font-sans">
-              您现在可以切换到「资源搜索」标签实时检索新加入的文件和目录。
-            </p>
+            {onNavigateToTasks && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={onNavigateToTasks}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold flex items-center gap-1.5 shadow-xs transition"
+                >
+                  前往「任务与状态监控」查看抓取详情 ➔
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

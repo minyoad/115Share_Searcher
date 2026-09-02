@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { 
   Search, 
+  ListChecks,
   FileCode, 
   FolderTree, 
   PlusCircle, 
@@ -11,10 +12,12 @@ import {
   Server, 
   ShieldCheck, 
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  HardDrive
 } from 'lucide-react';
 import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
 import { SearchEngineView } from './components/SearchEngineView';
+import { ShareTaskManager } from './components/ShareTaskManager';
 import { CodeExplorer } from './components/CodeExplorer';
 import { CrawlerVisualizer } from './components/CrawlerVisualizer';
 import { ImporterView } from './components/BatchImportModal';
@@ -35,14 +38,53 @@ export default function App() {
   };
 
   const handleImportSuccess = (newShare: ShareRecord, newFiles: FileRecord[]) => {
-    setShares(prev => [newShare, ...prev]);
+    setShares(prev => {
+      const exists = prev.find(s => s.share_code === newShare.share_code);
+      if (exists) {
+        return prev.map(s => s.share_code === newShare.share_code ? { ...s, status: 0 } : s);
+      }
+      return [newShare, ...prev];
+    });
     setFiles(prev => [...newFiles, ...prev]);
     showToast(`成功收录分享：${newShare.title}`);
+  };
+
+  const handleTriggerCrawl = (shareCode: string, receiveCode: string) => {
+    setShares(prev =>
+      prev.map(s => (s.share_code === shareCode ? { ...s, status: 0 } : s))
+    );
+    showToast(`已开始后台爬取任务：${shareCode}`);
+
+    // Simulate crawler completion after 1.5s
+    setTimeout(() => {
+      setShares(prev =>
+        prev.map(s => {
+          if (s.share_code === shareCode) {
+            return {
+              ...s,
+              status: 1,
+              file_count: s.file_count > 0 ? s.file_count : 18,
+              folder_count: s.folder_count > 0 ? s.folder_count : 3,
+              total_size: s.total_size > 0 ? s.total_size : 10737418240,
+              last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19)
+            };
+          }
+          return s;
+        })
+      );
+      showToast(`分享 ${shareCode} 抓取并索引完成！`);
+    }, 1500);
   };
 
   const handleOpenTree = (shareCode: string) => {
     setTreeShareCode(shareCode);
     setActiveTab('tree');
+  };
+
+  const handleSearchByShare = (shareCode: string) => {
+    setActiveTab('search');
+    // We can also notify user
+    showToast(`正在检索分享：${shareCode}`);
   };
 
   const handleReportShare = (shareCode: string) => {
@@ -51,6 +93,8 @@ export default function App() {
     );
     showToast(`已将分享 ${shareCode} 标记为失效并从搜索中过滤`);
   };
+
+  const pendingCount = shares.filter(s => s.status === 0).length;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
@@ -92,29 +136,19 @@ export default function App() {
               </button>
 
               <button
-                id="nav-code-tab"
-                onClick={() => setActiveTab('code')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'code'
+                id="nav-tasks-tab"
+                onClick={() => setActiveTab('tasks')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition relative ${
+                  activeTab === 'tasks'
                     ? 'bg-blue-600 text-white shadow-xs'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
-                <FileCode className="w-3.5 h-3.5" />
-                项目源码
-              </button>
-
-              <button
-                id="nav-crawler-tab"
-                onClick={() => setActiveTab('crawler')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'crawler'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <FolderTree className="w-3.5 h-3.5" />
-                爬虫引擎
+                <ListChecks className="w-3.5 h-3.5" />
+                任务监控
+                {pendingCount > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                )}
               </button>
 
               <button
@@ -131,6 +165,19 @@ export default function App() {
               </button>
 
               <button
+                id="nav-crawler-tab"
+                onClick={() => setActiveTab('crawler')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  activeTab === 'crawler'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+                爬虫引擎
+              </button>
+
+              <button
                 id="nav-tree-tab"
                 onClick={() => setActiveTab('tree')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
@@ -141,6 +188,19 @@ export default function App() {
               >
                 <Layers className="w-3.5 h-3.5" />
                 层级目录
+              </button>
+
+              <button
+                id="nav-code-tab"
+                onClick={() => setActiveTab('code')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  activeTab === 'code'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <FileCode className="w-3.5 h-3.5" />
+                项目源码
               </button>
 
               <button
@@ -171,13 +231,25 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'code' && <CodeExplorer />}
-
-        {activeTab === 'crawler' && <CrawlerVisualizer />}
+        {activeTab === 'tasks' && (
+          <ShareTaskManager
+            shares={shares}
+            onTriggerCrawl={handleTriggerCrawl}
+            onOpenTree={handleOpenTree}
+            onSearchByShare={handleSearchByShare}
+            onReportShare={handleReportShare}
+            onOpenImport={() => setActiveTab('import')}
+          />
+        )}
 
         {activeTab === 'import' && (
-          <ImporterView onImportSuccess={handleImportSuccess} />
+          <ImporterView 
+            onImportSuccess={handleImportSuccess} 
+            onNavigateToTasks={() => setActiveTab('tasks')}
+          />
         )}
+
+        {activeTab === 'crawler' && <CrawlerVisualizer />}
 
         {activeTab === 'tree' && (
           <DirectoryTreeView
@@ -187,6 +259,8 @@ export default function App() {
             onBackToSearch={() => setActiveTab('search')}
           />
         )}
+
+        {activeTab === 'code' && <CodeExplorer />}
 
         {activeTab === 'api' && <ApiTester />}
       </main>

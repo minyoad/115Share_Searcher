@@ -17,11 +17,65 @@ def format_size(size_bytes: int) -> str:
     return f"{size:.2f} {units[idx]}" if idx > 0 else f"{int(size)} B"
 
 
-# 115 Share Link Pattern: https://115.com/s/sw3xxxx?password=yyyy or 115.com/s/sw3xxxx#yyyy
-URL_REGEX = re.compile(
-    r"(?:https?://)?(?:115\.com/s/|anxia\.com/s/)?([a-zA-Z0-9_-]{8,64})(?:[?&]password=([a-zA-Z0-9]{4,32})|#([a-zA-Z0-9]{4,32}))?",
-    re.IGNORECASE
-)
+# Robust parser for all 115 share URL variations (115.com, 115cdn.com, anxia.com, hash passwords, etc.)
+def parse_115_share_url(raw_text: str) -> tuple[Optional[str], str]:
+    """
+    解析各种格式的 115 分享链接与提取码：
+    - https://115cdn.com/s/swnsdrk3h2m?password=p783
+    - https://115.com/s/sw6tcot3hbe?password=e9d7
+    - https://anxia.com/s/swxxxx#yyyy
+    - https://v.115.com/s/swxxxx?receive_code=yyyy
+    - swxxxx#yyyy / swxxxx?password=yyyy / swxxxx
+    """
+    if not raw_text:
+        return None, ""
+    
+    text = raw_text.strip()
+    
+    # Pattern 1: URL with /s/ (supports 115.com, 115cdn.com, anxia.com, web.115.com, etc.)
+    url_match = re.search(
+        r"(?:https?://)?(?:[a-zA-Z0-9.-]+\.)?(?:115(?:cdn)?|anxia)\.com/s/([a-zA-Z0-9_-]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if url_match:
+        share_code = url_match.group(1)
+        pwd_match = re.search(
+            r"(?:[?&](?:password|pwd|receive_code)=([a-zA-Z0-9]+)|#([a-zA-Z0-9]+))",
+            text,
+            re.IGNORECASE,
+        )
+        receive_code = ""
+        if pwd_match:
+            receive_code = pwd_match.group(1) or pwd_match.group(2) or ""
+        return share_code, receive_code
+
+    # Pattern 2: Any /s/([a-zA-Z0-9_-]+)
+    any_s_match = re.search(r"/s/([a-zA-Z0-9_-]{6,64})", text, re.IGNORECASE)
+    if any_s_match:
+        share_code = any_s_match.group(1)
+        pwd_match = re.search(
+            r"(?:[?&](?:password|pwd|receive_code)=([a-zA-Z0-9]+)|#([a-zA-Z0-9]+))",
+            text,
+            re.IGNORECASE,
+        )
+        receive_code = ""
+        if pwd_match:
+            receive_code = pwd_match.group(1) or pwd_match.group(2) or ""
+        return share_code, receive_code
+
+    # Pattern 3: Raw share_code + optional password (e.g., swnsdrk3h2m#p783 or swnsdrk3h2m)
+    code_match = re.search(
+        r"^([a-zA-Z0-9_-]{6,64})(?:[?&#](?:(?:password|pwd|receive_code)=)?([a-zA-Z0-9]{2,32}))?$",
+        text,
+        re.IGNORECASE,
+    )
+    if code_match:
+        share_code = code_match.group(1)
+        receive_code = code_match.group(2) or ""
+        return share_code, receive_code
+
+    return None, ""
 
 
 class ShareImportItem(BaseModel):
@@ -37,13 +91,13 @@ class ShareImportItem(BaseModel):
     def parse_raw_url_if_provided(cls, data: Any) -> Any:
         if isinstance(data, dict):
             raw = data.get("raw_url")
-            if raw and not data.get("share_code"):
-                match = URL_REGEX.search(raw.strip())
-                if match:
-                    data["share_code"] = match.group(1)
-                    pwd = match.group(2) or match.group(3) or ""
-                    if not data.get("receive_code"):
-                        data["receive_code"] = pwd
+            if raw:
+                sc, rc = parse_115_share_url(raw)
+                if sc and not data.get("share_code"):
+                    data["share_code"] = sc
+                if rc and not data.get("receive_code"):
+                    data["receive_code"] = rc
+
             # Clean share_code
             if data.get("share_code"):
                 data["share_code"] = data["share_code"].strip()
@@ -57,6 +111,7 @@ class ShareImportItem(BaseModel):
 class BatchImportRequest(BaseModel):
     """批量导入分享链接请求"""
     shares: List[ShareImportItem] = Field(..., min_length=1, max_length=200, description="分享列表")
+    force_crawl: bool = Field(default=True, description="是否强制重新触发爬取（若已存在或未完成则再次入队）")
 
 
 class BatchImportTaskResult(BaseModel):
@@ -90,9 +145,27 @@ class ShareInfo(BaseModel):
         pwd_suffix = f"?password={self.receive_code}" if self.receive_code else ""
         self.share_url = f"https://115.com/s/{self.share_code}{pwd_suffix}"
         
-        status_map = {0: "PENDING (抓取中)", 1: "ACTIVE (有效)", 2: "EXPIRED (失效/密码错误)", 3: "BANNED (违规封禁)"}
+        status_map = {0: "PENDING (抓取中/待抓取)", 1: "ACTIVE (抓取完成)", 2: "EXPIRED (失效/密码错误)", 3: "BANNED (违规封禁)"}
         self.status_desc = status_map.get(self.status, "UNKNOWN")
         return self
+
+
+class ShareListResponse(BaseModel):
+    """分享列表响应及统计信息"""
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    stats: dict
+    items: List[ShareInfo]
+
+
+class TriggerCrawlResponse(BaseModel):
+    """手动开始/重新爬取响应"""
+    share_code: str
+    task_id: str
+    status: str
+    message: str
 
 
 class SearchResultItem(BaseModel):

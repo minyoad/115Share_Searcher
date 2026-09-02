@@ -35,4 +35,4 @@ export interface FileRecord {
   share_title: string;
 }
 
-export type ActiveTab = 'search' | 'code' | 'crawler' | 'import' | 'api' | 'tree';
+export type ActiveTab = 'search' | 'tasks' | 'code' | 'crawler' | 'import' | 'tree' | 'api';
