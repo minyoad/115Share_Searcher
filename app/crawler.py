@@ -8,9 +8,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
+try:
+    import redis.asyncio as aioredis
+except ImportError:
+    aioredis = None
 
 from app.config import settings
 from app.models import File, Share, ShareStatus
@@ -411,9 +416,9 @@ class Crawler115Engine:
         )
 
     async def crawl_and_index(
-        self, db: AsyncSession, share_code: str, receive_code: str = ""
+        self, db: AsyncSession, share_code: str, receive_code: str = "", resume: bool = True
     ) -> Share:
-        logger.info(f"Starting High-Performance BFS crawl for 115 share: {share_code}")
+        logger.info(f"Starting High-Performance BFS crawl for 115 share: {share_code} (resume={resume})")
 
         stmt = select(Share).where(Share.share_code == share_code)
         res = await db.execute(stmt)
@@ -438,13 +443,95 @@ class Crawler115Engine:
 
         effective_pwd = receive_code or share_obj.receive_code or ""
 
+        # 初始化 Redis Checkpoint 客户端（用于断点进度快速持久化与恢复）
+        redis_checkpoint_cli = None
+        if aioredis is not None:
+            try:
+                redis_checkpoint_cli = aioredis.from_url(
+                    settings.REDIS_URL, encoding="utf-8", decode_responses=True
+                )
+            except Exception as r_err:
+                logger.debug(f"[Checkpoint] Redis client connection failed: {r_err}")
+
         dir_queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
-        await dir_queue.put(("0", "/"))
-
-        db_write_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue(maxsize=5000)
-
         visited_cids: Set[str] = set()
         visited_lock = asyncio.Lock()
+
+        # 断点续传 (Breakpoint Resumption) 恢复逻辑：
+        if resume and share_obj.id:
+            # 1. 检查数据库中当前分享已入库的记录条数
+            stmt_count = select(func.count(File.id)).where(File.share_id == share_obj.id)
+            existing_count = (await db.execute(stmt_count)).scalar() or 0
+
+            if existing_count > 0:
+                # 2. 从数据库查找所有作为 parent_115_id 存在子项的目录（说明其子项已被抓取写入）
+                stmt_parents = (
+                    select(File.parent_115_id)
+                    .where(File.share_id == share_obj.id)
+                    .distinct()
+                )
+                completed_parents = set((await db.execute(stmt_parents)).scalars().all())
+
+                # 3. 从 Redis 获取已标记抓取完成的 CID（支持记录已完全遍历的空目录）
+                redis_completed_cids: Set[str] = set()
+                if redis_checkpoint_cli:
+                    try:
+                        members = await redis_checkpoint_cli.smembers(
+                            f"115share:checkpoint:{share_code}:completed_cids"
+                        )
+                        redis_completed_cids.update(members)
+                    except Exception as r_err:
+                        logger.debug(f"[Checkpoint] Failed to read completed CIDs from Redis: {r_err}")
+
+                all_completed_cids = completed_parents.union(redis_completed_cids)
+
+                # 4. 查找数据库中已发现的所有目录
+                stmt_dirs = (
+                    select(File.file_115_id, File.full_path)
+                    .where(File.share_id == share_obj.id, File.is_dir == True)
+                )
+                discovered_dirs = {row[0]: row[1] for row in (await db.execute(stmt_dirs)).all()}
+
+                # 5. 计算尚未遍历完成的子目录
+                pending_dirs = [
+                    (cid, path) for cid, path in discovered_dirs.items()
+                    if cid not in all_completed_cids
+                ]
+
+                if "0" in all_completed_cids and pending_dirs:
+                    logger.info(
+                        f"[Resume-Checkpoint] 发现中断任务！已完成抓取 {len(all_completed_cids)} 个目录，"
+                        f"跳过这部分目录的重复网络请求，直接对剩余 {len(pending_dirs)} 个未完成子目录继续断点续传！"
+                    )
+                    visited_cids.update(all_completed_cids)
+                    for p_cid, p_path in pending_dirs:
+                        await dir_queue.put((p_cid, p_path))
+                elif "0" in all_completed_cids and not pending_dirs:
+                    logger.info(
+                        f"[Resume-Checkpoint] 数据库中已记录的所有 {len(discovered_dirs)} 个目录均已抓取完毕，"
+                        f"从根目录快速核验是否有新更新..."
+                    )
+                    await dir_queue.put(("0", "/"))
+                else:
+                    logger.info(
+                        f"[Resume-Checkpoint] 根目录抓取中途中断，从根目录继续（已有 {existing_count} 条记录通过 upsert 幂等更新）"
+                    )
+                    await dir_queue.put(("0", "/"))
+            else:
+                await dir_queue.put(("0", "/"))
+        else:
+            if not resume and share_obj.id:
+                logger.info(f"[Crawler] resume=False (强制全量重新抓取)，清除历史数据: share_code={share_code}")
+                await db.execute(delete(File).where(File.share_id == share_obj.id))
+                await db.commit()
+                if redis_checkpoint_cli:
+                    try:
+                        await redis_checkpoint_cli.delete(f"115share:checkpoint:{share_code}:completed_cids")
+                    except Exception:
+                        pass
+            await dir_queue.put(("0", "/"))
+
+        db_write_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue(maxsize=5000)
 
         extracted_meta: Dict[str, Any] = {
             "title": None,
@@ -676,6 +763,18 @@ class Crawler115Engine:
                         if offset >= total_in_dir or not item_list:
                             break
 
+                    # 标记当前目录抓取完毕，并持久化到 Redis Checkpoint 集合 (保留 7 天)
+                    if redis_checkpoint_cli:
+                        try:
+                            await redis_checkpoint_cli.sadd(
+                                f"115share:checkpoint:{share_code}:completed_cids", current_cid
+                            )
+                            await redis_checkpoint_cli.expire(
+                                f"115share:checkpoint:{share_code}:completed_cids", 86400 * 7
+                            )
+                        except Exception:
+                            pass
+
                 except Exception as exc:
                     logger.error(f"[Worker-{worker_id}] Error traversing share_code={share_code}, cid={current_cid}: {exc}")
                     fatal_error[0] = exc
@@ -775,18 +874,40 @@ class Crawler115Engine:
                     share_obj.title = new_title
                     logger.info(f"[Crawler] Set share {share_code} title to root directory: '{new_title}'")
 
+            # 断点续传终态统计：从 PostgreSQL 精确聚合最新入库的文件数、文件夹数与总大小
+            final_stats_stmt = (
+                select(
+                    func.count(File.id).filter(File.is_dir == False),
+                    func.count(File.id).filter(File.is_dir == True),
+                    func.coalesce(func.sum(File.size), 0)
+                ).where(File.share_id == share_obj.id)
+            )
+            final_res = (await db.execute(final_stats_stmt)).first()
+            if final_res:
+                share_obj.file_count = int(final_res[0] or 0)
+                share_obj.folder_count = int(final_res[1] or 0)
+                share_obj.total_size = int(final_res[2] or 0)
+            else:
+                share_obj.file_count = stats["files"]
+                share_obj.folder_count = stats["folders"]
+                share_obj.total_size = stats["bytes"]
+
             share_obj.status = ShareStatus.ACTIVE.value
-            share_obj.file_count = stats["files"]
-            share_obj.folder_count = stats["folders"]
-            share_obj.total_size = stats["bytes"]
             share_obj.last_crawled_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(share_obj)
 
+            # 抓取彻底完成，清理 Redis 中间断点缓存
+            if redis_checkpoint_cli:
+                try:
+                    await redis_checkpoint_cli.delete(f"115share:checkpoint:{share_code}:completed_cids")
+                except Exception:
+                    pass
+
             logger.info(
                 f"Successfully finished crawl for {share_code}: "
-                f"files={stats['files']}, folders={stats['folders']}, "
-                f"size={stats['bytes'] / (1024**3):.2f} GB"
+                f"files={share_obj.file_count}, folders={share_obj.folder_count}, "
+                f"size={share_obj.total_size / (1024**3):.2f} GB"
             )
             return share_obj
 
@@ -816,6 +937,11 @@ class Crawler115Engine:
                     w.cancel()
             if db_writer_task and not db_writer_task.done():
                 db_writer_task.cancel()
+            if redis_checkpoint_cli:
+                try:
+                    await redis_checkpoint_cli.aclose()
+                except Exception:
+                    pass
             await http_pool.close_all()
 
     async def _bulk_upsert_files(self, db: AsyncSession, records: List[Dict[str, Any]]) -> None:

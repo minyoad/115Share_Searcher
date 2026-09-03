@@ -461,17 +461,17 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                           ? 'bg-amber-600 hover:bg-amber-700 text-white'
                           : 'bg-blue-600 hover:bg-blue-700 text-white'
                       }`}
-                      title={isPending ? '立即触发/加速抓取' : '重新递归遍历该分享'}
+                      title={isPending ? (s.file_count > 0 ? '从中断目录继续断点续传' : '立即开始抓取') : '断点续传或重新遍历'}
                     >
                       {isPending ? (
                         <>
                           <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>立即开始抓取</span>
+                          <span>{s.file_count > 0 ? '继续断点续传' : '立即开始抓取'}</span>
                         </>
                       ) : (
                         <>
                           <Play className="w-3.5 h-3.5" />
-                          <span>重新抓取</span>
+                          <span>断点续传/重爬</span>
                         </>
                       )}
                     </button>

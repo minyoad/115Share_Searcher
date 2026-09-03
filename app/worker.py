@@ -41,7 +41,7 @@ async def get_redis_client() -> aioredis.Redis:
     return redis_client
 
 
-async def enqueue_crawl_task(share_code: str, receive_code: str = "") -> str:
+async def enqueue_crawl_task(share_code: str, receive_code: str = "", resume: bool = True) -> str:
     """
     Push a new crawl task into Redis Queue (FIFO list).
     Returns task_id.
@@ -52,6 +52,7 @@ async def enqueue_crawl_task(share_code: str, receive_code: str = "") -> str:
         "task_id": task_id,
         "share_code": share_code,
         "receive_code": receive_code,
+        "resume": resume,
     }
     await client.lpush(settings.QUEUE_NAME, json.dumps(payload))
     logger.info(f"Enqueued crawl task {task_id} for share_code={share_code}")
@@ -169,14 +170,15 @@ async def process_task(task_data: dict, crawler: Crawler115Engine) -> None:
     task_id = task_data.get("task_id")
     share_code = task_data.get("share_code")
     receive_code = task_data.get("receive_code", "")
+    resume = task_data.get("resume", True)
 
-    logger.info(f"Processing task {task_id}: share_code={share_code}")
+    logger.info(f"Processing task {task_id}: share_code={share_code} (resume={resume})")
 
     client = await get_redis_client()
     try:
         await client.publish(
             settings.WS_CHANNEL_NAME,
-            json.dumps({"event_type": "task_started", "data": {"share_code": share_code, "task_id": task_id}})
+            json.dumps({"event_type": "task_started", "data": {"share_code": share_code, "task_id": task_id, "resume": resume}})
         )
     except Exception:
         pass
@@ -186,7 +188,8 @@ async def process_task(task_data: dict, crawler: Crawler115Engine) -> None:
             await crawler.crawl_and_index(
                 db=session,
                 share_code=share_code,
-                receive_code=receive_code
+                receive_code=receive_code,
+                resume=resume
             )
             logger.info(f"Task {task_id} completed successfully for {share_code}")
             try:

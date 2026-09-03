@@ -389,15 +389,16 @@ async def sync_all_share_root_titles(db: AsyncSession = Depends(get_db)):
 @app.post(
     "/api/v1/shares/{share_code}/crawl",
     response_model=TriggerCrawlResponse,
-    summary="手动开始或重新抓取指定分享链接",
+    summary="手动开始或重新抓取指定分享链接（支持智能断点续传）",
 )
 async def trigger_share_crawl(
     share_code: str,
     receive_code: Optional[str] = Query(None, description="可选更新提取码"),
+    resume: bool = Query(True, description="是否开启断点续传（默认True，自动识别并跳过已抓取目录，秒级恢复断点）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    手动触发或重新开始爬取指定的 115 分享（无论当前是未完成、失败还是需强制刷新）
+    手动触发或重新开始爬取指定的 115 分享（支持智能断点续传，不重复抓取已入库目录）
     """
     clean_code = share_code.strip()
     stmt = select(Share).where(Share.share_code == clean_code)
@@ -426,19 +427,20 @@ async def trigger_share_crawl(
     task_id = await enqueue_crawl_task(
         share_code=clean_code,
         receive_code=effective_pwd,
+        resume=resume,
     )
 
     # Notify WebSocket clients in real-time
     await TaskWebSocketManager.get_instance().notify_task_event(
         "task_enqueued",
-        {"share_code": clean_code, "task_id": task_id, "status": 0}
+        {"share_code": clean_code, "task_id": task_id, "status": 0, "resume": resume}
     )
 
     return TriggerCrawlResponse(
         share_code=clean_code,
         task_id=task_id,
         status="QUEUED",
-        message=f"已成功触发爬取任务 (Task ID: {task_id})，Worker 将立即开始遍历抓取！"
+        message=f"已成功加入爬取队列 (Task ID: {task_id}, 断点续传: {'已开启' if resume else '关闭-重新抓取'})，Worker 将立即恢复执行！"
     )
 
 
@@ -483,13 +485,13 @@ async def batch_crawl_shares(
             db.add(s)
 
         queued_codes.append(code)
-        task_id = await enqueue_crawl_task(share_code=code, receive_code=pwd)
+        task_id = await enqueue_crawl_task(share_code=code, receive_code=pwd, resume=True)
         task_ids.append(task_id)
 
         # Notify WebSocket
         await TaskWebSocketManager.get_instance().notify_task_event(
             "task_enqueued",
-            {"share_code": code, "task_id": task_id, "status": 0}
+            {"share_code": code, "task_id": task_id, "status": 0, "resume": True}
         )
 
     await db.commit()

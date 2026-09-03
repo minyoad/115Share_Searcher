@@ -526,9 +526,9 @@
                 :disabled="triggeringCode === s.share_code"
                 :class="s.status === 0 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'"
                 class="px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-xs flex items-center gap-1 disabled:opacity-50"
-                :title="s.status === 0 ? '立即开始/加速抓取' : '重新爬取更新文件树'"
+                :title="s.status === 0 ? (s.file_count > 0 ? '从中断处继续断点续传' : '立即开始抓取') : '断点续传或重新爬取更新文件树'"
               >
-                <span>{{ triggeringCode === s.share_code ? '调度中...' : (s.status === 0 ? '▶️ 立即开始' : '🔄 重新抓取') }}</span>
+                <span>{{ triggeringCode === s.share_code ? '调度中...' : (s.status === 0 ? (s.file_count > 0 ? '▶️ 断点续传' : '▶️ 立即开始') : '🔄 断点续传/重爬') }}</span>
               </button>
 
               <button 
