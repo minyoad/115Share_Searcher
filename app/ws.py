@@ -1,4 +1,6 @@
 import asyncio
+from datetime import date, datetime
+from decimal import Decimal
 import json
 import logging
 from typing import Any, Dict, Optional, Set
@@ -13,6 +15,23 @@ from app.models import Share, ShareStatus
 from app.schemas import ShareInfo, format_size
 
 logger = logging.getLogger("app.ws")
+
+
+def safe_json_default(obj: Any) -> Any:
+    """
+    通用安全 JSON 序列化器：
+    自动处理 Decimal (PostgreSQL sum/numeric 聚合)、datetime、Pydantic 模型等非标准 JSON 类型，
+    彻底杜绝 'Object of type Decimal is not JSON serializable' 导致的 WebSocket 异常断开。
+    """
+    if isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(mode="json")
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return str(obj)
 
 
 class TaskWebSocketManager:
@@ -93,8 +112,9 @@ class TaskWebSocketManager:
     async def safe_send_json(self, websocket: WebSocket, message: Dict[str, Any]) -> bool:
         """
         线程/协程安全的 JSON 发送器：
-        1. 使用 per-websocket asyncio.Lock 避免并发写竞争导致的 ASGI 协议冲突断开
-        2. 异常自动捕获并从连接池清理失效连接
+        1. 使用 safe_json_default 彻底解决 Decimal (PostgreSQL sum/numeric 聚合)、datetime 序列化问题
+        2. 使用 per-websocket asyncio.Lock 避免并发写竞争导致的 ASGI 协议冲突断开
+        3. 异常自动捕获并从连接池清理失效连接
         """
         if websocket not in self.active_connections:
             return False
@@ -105,8 +125,10 @@ class TaskWebSocketManager:
             self.locks[websocket] = lock
 
         try:
+            # 采用自定义序列化器将字典安全序列化为 JSON 字符串发送
+            payload_text = json.dumps(message, default=safe_json_default, ensure_ascii=False)
             async with lock:
-                await websocket.send_json(message)
+                await websocket.send_text(payload_text)
             return True
         except Exception as exc:
             logger.warning(f"[WS-Manager] safe_send_json error (will disconnect): {exc}")
@@ -147,15 +169,15 @@ class TaskWebSocketManager:
                 except (ValueError, TypeError):
                     pass
 
-            # 1. 全局统计
-            total_shares = (await db.execute(select(func.count(Share.id)))).scalar() or 0
-            active_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0
-            pending_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0
-            expired_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0
-            banned_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0
+            # 1. 全局统计 (强制 int() 转换，避免 PostgreSQL numeric / Decimal 传出)
+            total_shares = int((await db.execute(select(func.count(Share.id)))).scalar() or 0)
+            active_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0)
+            pending_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0)
+            expired_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0)
+            banned_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0)
 
-            total_files = (await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0
-            total_size = (await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0
+            total_files = int((await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0)
+            total_size = int((await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0)
 
             stats_payload = {
                 "total_shares": total_shares,
@@ -172,7 +194,7 @@ class TaskWebSocketManager:
             count_stmt = select(func.count(Share.id))
             if conditions:
                 count_stmt = count_stmt.where(*conditions)
-            filtered_total = (await db.execute(count_stmt)).scalar() or 0
+            filtered_total = int((await db.execute(count_stmt)).scalar() or 0)
 
             offset = (page - 1) * page_size
             data_stmt = (
@@ -196,16 +218,16 @@ class TaskWebSocketManager:
                 try:
                     items.append(
                         ShareInfo(
-                            id=row.id,
+                            id=int(row.id),
                             share_code=row.share_code or "",
-                            receive_code=row.receive_code or "",
-                            title=row.title or "",
-                            file_count=row.file_count or 0,
-                            folder_count=row.folder_count or 0,
-                            total_size=row.total_size or 0,
-                            status=row.status if row.status is not None else 0,
-                            last_crawled_at=row.last_crawled_at,
-                            created_at=row.created_at,
+                            receive_code=getattr(row, "receive_code", "") or "",
+                            title=getattr(row, "title", "") or "",
+                            file_count=int(getattr(row, "file_count", 0) or 0),
+                            folder_count=int(getattr(row, "folder_count", 0) or 0),
+                            total_size=int(getattr(row, "total_size", 0) or 0),
+                            status=int(getattr(row, "status", 0)) if getattr(row, "status", None) is not None else 0,
+                            last_crawled_at=getattr(row, "last_crawled_at", None),
+                            created_at=getattr(row, "created_at", None),
                         ).model_dump(mode="json")
                     )
                 except Exception as row_exc:
@@ -232,13 +254,13 @@ class TaskWebSocketManager:
 
         # 获取全局统计
         async with AsyncSessionLocal() as db:
-            total_shares = (await db.execute(select(func.count(Share.id)))).scalar() or 0
-            active_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0
-            pending_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0
-            expired_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0
-            banned_shares = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0
-            total_files = (await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0
-            total_size = (await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0
+            total_shares = int((await db.execute(select(func.count(Share.id)))).scalar() or 0)
+            active_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0)
+            pending_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0)
+            expired_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0)
+            banned_shares = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0)
+            total_files = int((await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0)
+            total_size = int((await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0)
 
             stats_payload = {
                 "total_shares": total_shares,

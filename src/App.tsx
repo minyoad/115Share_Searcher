@@ -77,6 +77,75 @@ export default function App() {
     }, 1500);
   };
 
+  const handleBatchTriggerCrawl = (shareCodes: string[]) => {
+    setShares(prev =>
+      prev.map(s => (shareCodes.includes(s.share_code) ? { ...s, status: 0 } : s))
+    );
+    showToast(`🚀 已批量为选中的 ${shareCodes.length} 个分享重新发送抓取与索引指令！`);
+
+    setTimeout(() => {
+      setShares(prev =>
+        prev.map(s => {
+          if (shareCodes.includes(s.share_code)) {
+            return {
+              ...s,
+              status: 1,
+              file_count: s.file_count > 0 ? s.file_count : 24,
+              folder_count: s.folder_count > 0 ? s.folder_count : 4,
+              total_size: s.total_size > 0 ? s.total_size : 12884901888,
+              last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19)
+            };
+          }
+          return s;
+        })
+      );
+      showToast(`✅ 选中的 ${shareCodes.length} 个分享重新抓取并更新完成！`);
+    }, 1800);
+  };
+
+  const handleExportShares = (shareCodes?: string[]) => {
+    const targetShares = shareCodes && shareCodes.length > 0
+      ? shares.filter(s => shareCodes.includes(s.share_code))
+      : shares;
+
+    if (targetShares.length === 0) {
+      showToast('⚠️ 未选择任何可导出的分享任务');
+      return;
+    }
+
+    const exportPayload = {
+      exported_at: new Date().toISOString(),
+      service: "115 Cloud Drive Share Search Service",
+      total_count: targetShares.length,
+      shares: targetShares.map(s => ({
+        share_code: s.share_code,
+        receive_code: s.receive_code || "",
+        title: s.title || "",
+        file_count: s.file_count,
+        folder_count: s.folder_count,
+        total_size: s.total_size,
+        status: s.status,
+        last_crawled_at: s.last_crawled_at || null,
+        created_at: s.created_at || new Date().toISOString(),
+        raw_url: `https://115.com/s/${s.share_code}${s.receive_code ? `?password=${s.receive_code}` : ''}`
+      }))
+    };
+
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    link.href = url;
+    link.download = shareCodes && shareCodes.length > 0
+      ? `115_selected_${shareCodes.length}_shares_${timestamp}.json`
+      : `115_all_${shares.length}_shares_${timestamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`✅ 成功导出 ${targetShares.length} 条分享记录为 JSON 格式！`);
+  };
+
   const handleOpenTree = (shareCode: string) => {
     setTreeShareCode(shareCode);
     setActiveTab('tree');
@@ -253,6 +322,8 @@ export default function App() {
             onSearchByShare={handleSearchByShare}
             onReportShare={handleReportShare}
             onOpenImport={() => setActiveTab('import')}
+            onBatchTriggerCrawl={handleBatchTriggerCrawl}
+            onExportShares={handleExportShares}
           />
         )}
 

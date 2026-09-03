@@ -186,6 +186,33 @@ class TriggerCrawlResponse(BaseModel):
     message: str
 
 
+class BatchCrawlRequest(BaseModel):
+    """批量重新抓取请求"""
+    share_codes: List[str] = Field(..., min_length=1, max_length=500, description="需要重新抓取的分享代码列表")
+
+
+class BatchCrawlResponse(BaseModel):
+    """批量重新抓取响应"""
+    total_requested: int
+    tasks_queued: int
+    share_codes: List[str]
+    task_ids: List[str]
+    message: str
+
+
+class ExportSharesRequest(BaseModel):
+    """导出分享配置请求"""
+    share_codes: Optional[List[str]] = Field(default=None, description="指定导出的分享代码列表；若为空则导出全部")
+
+
+class ExportSharesResponse(BaseModel):
+    """导出配置响应"""
+    version: str = "1.0"
+    export_time: str
+    total_count: int
+    shares: List[Dict[str, Any]]
+
+
 class SearchResultItem(BaseModel):
     """检索结果文件条目"""
     id: int
@@ -247,6 +274,7 @@ class DirectoryListResponse(BaseModel):
     share_status: int = 1
     share_url: str = ""
     parent_115_id: str
+    parent_cid: str = "0"
     parent_path: str = "/"
     total: int
     folder_count: int = 0

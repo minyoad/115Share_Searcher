@@ -18,9 +18,13 @@ from app.database import get_db, init_db
 from app.models import File, Share, ShareStatus
 from app.proxy import ProxyManager
 from app.schemas import (
+    BatchCrawlRequest,
+    BatchCrawlResponse,
     BatchImportRequest,
     BatchImportTaskResult,
     DirectoryListResponse,
+    ExportSharesRequest,
+    ExportSharesResponse,
     FileTreeNode,
     ProxyConfigUpdateRequest,
     ProxyTestRequest,
@@ -204,15 +208,15 @@ async def list_shares(
     if status is not None:
         conditions.append(Share.status == status)
 
-    # Global Stats
-    total_shares_count = (await db.execute(select(func.count(Share.id)))).scalar() or 0
-    active_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0
-    pending_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0
-    expired_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0
-    banned_shares_count = (await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0
+    # Global Stats (cast to int to avoid PostgreSQL Decimal/numeric non-serializable objects)
+    total_shares_count = int((await db.execute(select(func.count(Share.id)))).scalar() or 0)
+    active_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0)
+    pending_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0)
+    expired_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0)
+    banned_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0)
 
-    total_files_sum = (await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0
-    total_size_sum = (await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0
+    total_files_sum = int((await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0)
+    total_size_sum = int((await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0)
 
     stats_payload = {
         "total_shares": total_shares_count,
@@ -229,7 +233,7 @@ async def list_shares(
     count_stmt = select(func.count(Share.id))
     if conditions:
         count_stmt = count_stmt.where(*conditions)
-    filtered_total = (await db.execute(count_stmt)).scalar() or 0
+    filtered_total = int((await db.execute(count_stmt)).scalar() or 0)
 
     # Data query with auto-migration retry if columns were missing in legacy DB
     offset = (page - 1) * page_size
@@ -336,6 +340,131 @@ async def trigger_share_crawl(
         task_id=task_id,
         status="QUEUED",
         message=f"已成功触发爬取任务 (Task ID: {task_id})，Worker 将立即开始遍历抓取！"
+    )
+
+
+@app.post(
+    "/api/v1/shares/batch-crawl",
+    response_model=BatchCrawlResponse,
+    summary="批量选中一键重新抓取分享资源",
+)
+async def batch_crawl_shares(
+    payload: BatchCrawlRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    接收一组选中的分享代码，批量将其状态重置为待抓取 (PENDING)，推入 Redis 爬虫任务队列，
+    并通过 WebSocket 实时向客户端推送状态更新。
+    """
+    clean_codes = list(dict.fromkeys(c.strip() for c in payload.share_codes if c.strip()))
+    if not clean_codes:
+        raise HTTPException(status_code=400, detail="未提供有效的分享代码列表")
+
+    # 查询现有记录
+    stmt = select(Share).where(Share.share_code.in_(clean_codes))
+    shares = (await db.execute(stmt)).scalars().all()
+    share_map = {s.share_code: s for s in shares}
+
+    task_ids = []
+    queued_codes = []
+
+    for code in clean_codes:
+        s = share_map.get(code)
+        if s:
+            s.status = ShareStatus.PENDING.value
+            pwd = s.receive_code or ""
+        else:
+            pwd = ""
+            s = Share(
+                share_code=code,
+                receive_code="",
+                title=f"115 分享 ({code})",
+                status=ShareStatus.PENDING.value,
+            )
+            db.add(s)
+
+        queued_codes.append(code)
+        task_id = await enqueue_crawl_task(share_code=code, receive_code=pwd)
+        task_ids.append(task_id)
+
+        # Notify WebSocket
+        await TaskWebSocketManager.get_instance().notify_task_event(
+            "task_enqueued",
+            {"share_code": code, "task_id": task_id, "status": 0}
+        )
+
+    await db.commit()
+    await TaskWebSocketManager.get_instance().broadcast_full_update()
+
+    return BatchCrawlResponse(
+        total_requested=len(clean_codes),
+        tasks_queued=len(task_ids),
+        share_codes=queued_codes,
+        task_ids=task_ids,
+        message=f"已成功为 {len(task_ids)} 个分享链接触发重新抓取任务，后台 Worker 将并发解析！",
+    )
+
+
+@app.api_route(
+    "/api/v1/shares/export",
+    methods=["GET", "POST"],
+    response_model=ExportSharesResponse,
+    summary="导出分享配置（支持指定选中的 share_codes 或全量导出）",
+)
+async def export_shares_config(
+    payload: Optional[ExportSharesRequest] = None,
+    share_codes: Optional[str] = Query(None, description="逗号分隔的分享代码（GET请求时使用）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    导出分享配置数据为标准化 JSON 格式，可用于数据备份、迁移或重新导入。
+    """
+    from datetime import datetime, timezone
+
+    selected_codes = []
+    if payload and payload.share_codes:
+        selected_codes = [c.strip() for c in payload.share_codes if c.strip()]
+    elif share_codes:
+        selected_codes = [c.strip() for c in share_codes.split(",") if c.strip()]
+
+    stmt = select(Share).order_by(Share.id.desc())
+    if selected_codes:
+        stmt = stmt.where(Share.share_code.in_(selected_codes))
+
+    rows = (await db.execute(stmt)).scalars().all()
+
+    status_map = {
+        0: "PENDING (抓取中/待开始)",
+        1: "ACTIVE (抓取完成)",
+        2: "EXPIRED (密码错误/失效)",
+        3: "BANNED (违规封禁)",
+    }
+
+    shares_data = []
+    for s in rows:
+        pwd = s.receive_code or ""
+        pwd_param = f"?password={pwd}" if pwd else ""
+        url = f"https://115.com/s/{s.share_code}{pwd_param}"
+        shares_data.append({
+            "share_code": s.share_code,
+            "receive_code": pwd,
+            "title": s.title or f"115 分享 ({s.share_code})",
+            "share_url": url,
+            "file_count": int(s.file_count or 0),
+            "folder_count": int(s.folder_count or 0),
+            "total_size": int(s.total_size or 0),
+            "total_size_formatted": format_size(s.total_size or 0),
+            "status": int(s.status) if s.status is not None else 0,
+            "status_desc": status_map.get(s.status, "UNKNOWN"),
+            "last_crawled_at": s.last_crawled_at.isoformat() if s.last_crawled_at else None,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        })
+
+    return ExportSharesResponse(
+        version="1.0",
+        export_time=datetime.now(timezone.utc).isoformat(),
+        total_count=len(shares_data),
+        shares=shares_data,
     )
 
 
@@ -553,6 +682,7 @@ async def list_share_directory(
 
     # Find parent folder info if not root
     parent_path = "/"
+    parent_cid = "0"
     breadcrumbs = [{"name": "根目录", "cid": "0", "path": "/"}]
     
     if parent_115_id != "0":
@@ -564,14 +694,33 @@ async def list_share_directory(
         parent_rec = (await db.execute(parent_stmt)).scalar_one_or_none()
         if parent_rec:
             parent_path = parent_rec.full_path
-            # Build breadcrumbs from path
-            parts = [p for p in parent_path.strip("/").split("/") if p]
-            curr_accum = ""
-            for idx, part in enumerate(parts):
-                curr_accum += "/" + part
-                # If this is the current folder, its cid is parent_115_id
-                cid_val = parent_115_id if idx == len(parts) - 1 else ""
-                breadcrumbs.append({"name": part, "cid": cid_val, "path": curr_accum})
+            parent_cid = parent_rec.parent_115_id or "0"
+            
+            # Recursively or iteratively find all ancestor folder records by following parent_115_id
+            chain = []
+            curr_rec = parent_rec
+            visited_ids = set()
+            while curr_rec and curr_rec.file_115_id not in visited_ids:
+                visited_ids.add(curr_rec.file_115_id)
+                chain.append({
+                    "name": curr_rec.name,
+                    "cid": curr_rec.file_115_id,
+                    "path": curr_rec.full_path
+                })
+                if not curr_rec.parent_115_id or curr_rec.parent_115_id == "0":
+                    break
+                
+                # Fetch immediate ancestor
+                ancestor_stmt = select(File).where(
+                    File.share_id == share_obj.id,
+                    File.file_115_id == curr_rec.parent_115_id,
+                    File.is_dir.is_(True)
+                )
+                curr_rec = (await db.execute(ancestor_stmt)).scalar_one_or_none()
+
+            # Chain was collected from leaf to root; reverse it for breadcrumb display
+            for ancestor in reversed(chain):
+                breadcrumbs.append(ancestor)
 
     files_stmt = (
         select(File)
@@ -620,6 +769,7 @@ async def list_share_directory(
         share_status=share_obj.status,
         share_url=share_url,
         parent_115_id=parent_115_id,
+        parent_cid=parent_cid,
         parent_path=parent_path,
         total=len(items),
         folder_count=folder_count,

@@ -336,6 +336,81 @@
             ⚠️ 密码错误 / 失效
           </button>
         </div>
+
+        <!-- Batch Operations & Export Toolbar -->
+        <div class="p-3 bg-slate-50/80 rounded-xl border border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs mt-1">
+          <!-- Left: Selection controls -->
+          <div class="flex items-center gap-2 flex-wrap">
+            <label class="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700 select-none hover:text-slate-900 transition">
+              <input 
+                type="checkbox" 
+                :checked="isAllPageSelected" 
+                @change="toggleSelectAllPage"
+                class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>全选本页</span>
+            </label>
+
+            <button 
+              @click="invertSelection"
+              class="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md transition font-medium shadow-2xs"
+              title="反向选择当前页面的所有任务"
+            >
+              反选
+            </button>
+
+            <span v-if="selectedShareCodes.length > 0" class="px-2.5 py-1 bg-blue-100/80 text-blue-800 font-bold rounded-md border border-blue-200">
+              已选中 {{ selectedShareCodes.length }} 项
+            </span>
+            <span v-else class="text-slate-400 pl-1">
+              (勾选卡片复选框可进行批量操作或导出)
+            </span>
+
+            <button 
+              v-if="selectedShareCodes.length > 0"
+              @click="clearSelection"
+              class="text-xs text-slate-500 hover:text-rose-600 underline font-medium ml-1 transition"
+            >
+              清空选择
+            </button>
+          </div>
+
+          <!-- Right: Batch Action & Export Buttons -->
+          <div class="flex items-center gap-2 flex-wrap">
+            <!-- Batch Re-crawl Button -->
+            <button 
+              @click="batchReCrawlSelected"
+              :disabled="selectedShareCodes.length === 0 || batchCrawling"
+              class="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              :title="selectedShareCodes.length === 0 ? '请先勾选需要重新抓取的分享链接' : '批量重新向 Worker 发送抓取索引指令'"
+            >
+              <span :class="batchCrawling ? 'animate-spin' : ''">🔄</span>
+              <span>{{ batchCrawling ? '并发排队中...' : `批量重新抓取 (${selectedShareCodes.length})` }}</span>
+            </button>
+
+            <!-- Export Selected JSON -->
+            <button 
+              @click="exportConfig(true)"
+              :disabled="selectedShareCodes.length === 0 || exportingConfig"
+              class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              :title="selectedShareCodes.length === 0 ? '请先勾选需要导出的分享链接' : '将当前选中的分享记录导出为 JSON 配置文件'"
+            >
+              <span :class="exportingConfig ? 'animate-spin' : ''">📥</span>
+              <span>导出选中配置 ({{ selectedShareCodes.length }})</span>
+            </button>
+
+            <!-- Export All JSON -->
+            <button 
+              @click="exportConfig(false)"
+              :disabled="exportingConfig || sharesList.length === 0"
+              class="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="导出当前系统所有分享任务为标准 JSON 文件"
+            >
+              <span :class="exportingConfig ? 'animate-spin' : ''">📑</span>
+              <span>导出全部配置</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Error Alert Banner -->
@@ -357,9 +432,21 @@
         <div 
           v-for="s in sharesList" 
           :key="s.id"
-          class="bg-white rounded-xl p-4 sm:p-5 border border-slate-200 shadow-xs hover:border-slate-300 transition"
+          :class="selectedShareCodes.includes(s.share_code) ? 'border-blue-400 bg-blue-50/25 ring-1 ring-blue-400/40' : 'border-slate-200 bg-white'"
+          class="rounded-xl p-4 sm:p-5 border shadow-xs hover:border-slate-300 transition flex items-start gap-3.5"
         >
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <!-- Card Selection Checkbox -->
+          <div class="pt-1 select-none shrink-0" @click.stop>
+            <input 
+              type="checkbox" 
+              :value="s.share_code" 
+              v-model="selectedShareCodes"
+              class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              :title="'选择 ' + s.share_code"
+            />
+          </div>
+
+          <div class="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <!-- Left Info -->
             <div class="space-y-1.5 flex-1 min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
@@ -1276,6 +1363,11 @@
         const shareStatusFilter = ref(null);
         const triggeringCode = ref('');
 
+        // Batch Selection & Operations state
+        const selectedShareCodes = ref([]);
+        const batchCrawling = ref(false);
+        const exportingConfig = ref(false);
+
         const importText = ref('https://115cdn.com/s/swnsdrk3h2m?password=p783\nhttps://115cdn.com/s/sw6tcot3hbe?password=e9d7');
         const importLoading = ref(false);
         const importResult = ref(null);
@@ -1491,10 +1583,21 @@
         };
 
         const goBackToCrumb = (crumb) => {
-          loadTree(treeShareCode.value, crumb.cid || '0');
+          if (!crumb || !crumb.cid || crumb.cid === '0') {
+            loadTree(treeShareCode.value, '0');
+          } else {
+            loadTree(treeShareCode.value, crumb.cid);
+          }
         };
 
         const goUpOneLevel = () => {
+          // 优先使用后端精确返回的 parent_cid（父文件夹的 115 CID）
+          if (treeData.value && treeData.value.parent_cid !== undefined && treeData.value.parent_cid !== null) {
+            loadTree(treeShareCode.value, String(treeData.value.parent_cid || '0'));
+            return;
+          }
+
+          // 降级回退方案：从面包屑导航倒数第二项获取上级 CID
           if (treeBreadcrumbs.value.length > 1) {
             const target = treeBreadcrumbs.value[treeBreadcrumbs.value.length - 2];
             loadTree(treeShareCode.value, target.cid || '0');
@@ -1789,6 +1892,120 @@
           loadShares(1);
         };
 
+        const isAllPageSelected = computed(() => {
+          if (!sharesList.value || sharesList.value.length === 0) return false;
+          return sharesList.value.every(s => selectedShareCodes.value.includes(s.share_code));
+        });
+
+        const toggleSelectAllPage = () => {
+          if (isAllPageSelected.value) {
+            const pageCodes = new Set(sharesList.value.map(s => s.share_code));
+            selectedShareCodes.value = selectedShareCodes.value.filter(c => !pageCodes.has(c));
+          } else {
+            const currentSet = new Set(selectedShareCodes.value);
+            sharesList.value.forEach(s => currentSet.add(s.share_code));
+            selectedShareCodes.value = Array.from(currentSet);
+          }
+        };
+
+        const invertSelection = () => {
+          const currentSet = new Set(selectedShareCodes.value);
+          sharesList.value.forEach(s => {
+            if (currentSet.has(s.share_code)) {
+              currentSet.delete(s.share_code);
+            } else {
+              currentSet.add(s.share_code);
+            }
+          });
+          selectedShareCodes.value = Array.from(currentSet);
+        };
+
+        const clearSelection = () => {
+          selectedShareCodes.value = [];
+        };
+
+        const batchReCrawlSelected = async () => {
+          if (selectedShareCodes.value.length === 0) {
+            showToast('请先勾选需要重新抓取的分享链接！');
+            return;
+          }
+          const count = selectedShareCodes.value.length;
+          if (!confirm(`确定要为选中的 ${count} 个分享链接重新发送抓取与索引指令吗？`)) {
+            return;
+          }
+          batchCrawling.value = true;
+          try {
+            const res = await fetch('/api/v1/shares/batch-crawl', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ share_codes: selectedShareCodes.value })
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({ detail: '批量操作失败' }));
+              throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            showToast(`✅ ${data.message}`);
+            clearSelection();
+            if (wsConnected.value) {
+              syncWsSubscription();
+            } else {
+              await loadShares(sharesPage.value);
+            }
+          } catch (err) {
+            showToast(`❌ 批量重新抓取失败: ${err.message}`);
+          } finally {
+            batchCrawling.value = false;
+          }
+        };
+
+        const downloadJsonFile = (data, filename) => {
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        };
+
+        const exportConfig = async (onlySelected = false) => {
+          exportingConfig.value = true;
+          try {
+            let payload = {};
+            let filenamePrefix = '115_shares_config_all';
+            if (onlySelected) {
+              if (selectedShareCodes.value.length === 0) {
+                showToast('未选择任何分享项，请先在列表中勾选！');
+                exportingConfig.value = false;
+                return;
+              }
+              payload = { share_codes: selectedShareCodes.value };
+              filenamePrefix = `115_shares_selected_${selectedShareCodes.value.length}`;
+            }
+
+            const res = await fetch('/api/v1/shares/export', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({ detail: '导出失败' }));
+              throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            const nowStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            downloadJsonFile(data, `${filenamePrefix}_${nowStr}.json`);
+            showToast(`✅ 成功导出 ${data.total_count} 条分享配置为 JSON 文件！`);
+          } catch (err) {
+            showToast(`❌ 导出配置失败: ${err.message}`);
+          } finally {
+            exportingConfig.value = false;
+          }
+        };
+
         const recoveringStuck = ref(false);
 
         const recoverStuckTasks = async () => {
@@ -1947,7 +2164,15 @@
           recoverStuckTasks,
           seedingDemo,
           seedDemoData,
-          wsConnected,
+          selectedShareCodes,
+          batchCrawling,
+          exportingConfig,
+          isAllPageSelected,
+          toggleSelectAllPage,
+          invertSelection,
+          clearSelection,
+          batchReCrawlSelected,
+          exportConfig,
         };
       }
     }).mount('#app');

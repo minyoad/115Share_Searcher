@@ -13,7 +13,10 @@ import {
   Database,
   HardDrive,
   Copy,
-  Check
+  Check,
+  Download,
+  CheckSquare,
+  FileJson
 } from 'lucide-react';
 import { ShareRecord } from '../types';
 
@@ -24,6 +27,8 @@ interface ShareTaskManagerProps {
   onSearchByShare: (shareCode: string) => void;
   onReportShare: (shareCode: string) => void;
   onOpenImport: () => void;
+  onBatchTriggerCrawl?: (shareCodes: string[]) => void;
+  onExportShares?: (shareCodes?: string[]) => void;
 }
 
 export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
@@ -33,10 +38,14 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   onSearchByShare,
   onReportShare,
   onOpenImport,
+  onBatchTriggerCrawl,
+  onExportShares,
 }) => {
   const [filterStatus, setFilterStatus] = useState<number | null>(null);
   const [searchKw, setSearchKw] = useState('');
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [selectedShareCodes, setSelectedShareCodes] = useState<string[]>([]);
+  const [batchCrawling, setBatchCrawling] = useState(false);
 
   const formatSize = (bytes: number) => {
     if (bytes <= 0) return '0 B';
@@ -74,6 +83,56 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  // Batch selection methods
+  const isAllSelected = filteredShares.length > 0 && filteredShares.every(s => selectedShareCodes.includes(s.share_code));
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      const filteredCodes = new Set(filteredShares.map(s => s.share_code));
+      setSelectedShareCodes(prev => prev.filter(code => !filteredCodes.has(code)));
+    } else {
+      const set = new Set(selectedShareCodes);
+      filteredShares.forEach(s => set.add(s.share_code));
+      setSelectedShareCodes(Array.from(set));
+    }
+  };
+
+  const invertSelection = () => {
+    const set = new Set(selectedShareCodes);
+    filteredShares.forEach(s => {
+      if (set.has(s.share_code)) {
+        set.delete(s.share_code);
+      } else {
+        set.add(s.share_code);
+      }
+    });
+    setSelectedShareCodes(Array.from(set));
+  };
+
+  const toggleSelectOne = (code: string) => {
+    setSelectedShareCodes(prev => 
+      prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]
+    );
+  };
+
+  const handleBatchReCrawl = () => {
+    if (selectedShareCodes.length === 0) return;
+    if (onBatchTriggerCrawl) {
+      setBatchCrawling(true);
+      onBatchTriggerCrawl(selectedShareCodes);
+      setTimeout(() => {
+        setBatchCrawling(false);
+        setSelectedShareCodes([]);
+      }, 1000);
+    }
+  };
+
+  const handleExport = (onlySelected: boolean) => {
+    if (onExportShares) {
+      onExportShares(onlySelected ? selectedShareCodes : undefined);
+    }
   };
 
   return (
@@ -196,6 +255,85 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
             ⚠️ 密码错误 / 失效 ({expiredShares})
           </button>
         </div>
+
+        {/* Batch Operations & Export Toolbar */}
+        <div className="bg-slate-50/90 rounded-xl p-3 border border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {/* Left: Selection controls */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700 select-none hover:text-slate-900 transition">
+              <input 
+                type="checkbox" 
+                checked={isAllSelected}
+                onChange={toggleSelectAll}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>全选筛选结果</span>
+            </label>
+
+            <button 
+              onClick={invertSelection}
+              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md transition font-medium shadow-2xs"
+              title="反向选择当前列表项"
+            >
+              反选
+            </button>
+
+            {selectedShareCodes.length > 0 ? (
+              <span className="px-2.5 py-1 bg-blue-100/80 text-blue-800 font-bold rounded-md border border-blue-200">
+                已选中 {selectedShareCodes.length} 项
+              </span>
+            ) : (
+              <span className="text-slate-400 pl-1">
+                (勾选卡片复选框可进行批量操作或配置导出)
+              </span>
+            )}
+
+            {selectedShareCodes.length > 0 && (
+              <button 
+                onClick={() => setSelectedShareCodes([])}
+                className="text-xs text-slate-500 hover:text-rose-600 underline font-medium ml-1 transition"
+              >
+                清空选择
+              </button>
+            )}
+          </div>
+
+          {/* Right: Action Buttons */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Batch Re-crawl */}
+            <button 
+              onClick={handleBatchReCrawl}
+              disabled={selectedShareCodes.length === 0 || batchCrawling}
+              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={selectedShareCodes.length === 0 ? "请先勾选需要重新抓取的分享" : "一键批量重新抓取已勾选的分享链接"}
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${batchCrawling ? 'animate-spin' : ''}`} />
+              <span>{batchCrawling ? '重新入队中...' : `批量重新抓取 (${selectedShareCodes.length})`}</span>
+            </button>
+
+            {/* Export Selected JSON */}
+            <button 
+              onClick={() => handleExport(true)}
+              disabled={selectedShareCodes.length === 0}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="将选中的分享记录导出为 JSON 备份配置"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>导出选中配置 ({selectedShareCodes.length})</span>
+            </button>
+
+            {/* Export All JSON */}
+            <button 
+              onClick={() => handleExport(false)}
+              disabled={shares.length === 0}
+              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="导出全部分享任务为标准 JSON 文件"
+            >
+              <FileJson className="w-3.5 h-3.5 text-slate-500" />
+              <span>导出全量配置</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Share Tasks List */}
@@ -205,13 +343,27 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
             const pwdSuffix = s.receive_code ? `?password=${s.receive_code}` : '';
             const shareUrl = `https://115.com/s/${s.share_code}${pwdSuffix}`;
             const isPending = s.status === 0;
+            const isSelected = selectedShareCodes.includes(s.share_code);
 
             return (
               <div
                 key={s.id}
-                className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs hover:border-slate-300 transition"
+                className={`rounded-2xl p-4 sm:p-5 border transition shadow-xs hover:border-slate-300 flex items-start gap-3.5 ${
+                  isSelected ? 'border-blue-400 bg-blue-50/25 ring-1 ring-blue-400/40' : 'bg-white border-slate-200'
+                }`}
               >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                {/* Checkbox */}
+                <div className="pt-1 select-none shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <input 
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelectOne(s.share_code)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    title={`选择 ${s.share_code}`}
+                  />
+                </div>
+
+                <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   {/* Left Metadata */}
                   <div className="space-y-2 flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
