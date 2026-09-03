@@ -156,60 +156,60 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Overview Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">收录分享总数</p>
-          <p className="text-2xl font-bold text-slate-900 mt-1">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3.5">
+        <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-xs">
+          <p className="text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider">收录分享总数</p>
+          <p className="text-lg sm:text-2xl font-bold text-slate-900 mt-0.5 sm:mt-1">
             {totalShares} <span className="text-xs font-normal text-slate-400">个任务</span>
           </p>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider flex items-center gap-1">
+        <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-xs">
+          <p className="text-[11px] sm:text-xs font-semibold text-emerald-600 uppercase tracking-wider flex items-center gap-1">
             <CheckCircle className="w-3.5 h-3.5" />
-            抓取完成 (有效)
+            有效 / 完成
           </p>
-          <p className="text-2xl font-bold text-emerald-600 mt-1">
+          <p className="text-lg sm:text-2xl font-bold text-emerald-600 mt-0.5 sm:mt-1">
             {activeShares} <span className="text-xs font-normal text-slate-400">个</span>
           </p>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider flex items-center gap-1">
+        <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-xs">
+          <p className="text-[11px] sm:text-xs font-semibold text-amber-600 uppercase tracking-wider flex items-center gap-1">
             <Clock className="w-3.5 h-3.5" />
             抓取中 / 待抓取
           </p>
-          <p className="text-2xl font-bold text-amber-600 mt-1 flex items-center gap-2">
+          <p className="text-lg sm:text-2xl font-bold text-amber-600 mt-0.5 sm:mt-1 flex items-center gap-2">
             {pendingShares}
             {pendingShares > 0 && (
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping"></span>
+              <span className="w-2 sm:w-2.5 h-2 sm:h-2.5 rounded-full bg-amber-500 animate-ping"></span>
             )}
           </p>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider flex items-center gap-1">
+        <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-xs">
+          <p className="text-[11px] sm:text-xs font-semibold text-blue-600 uppercase tracking-wider flex items-center gap-1">
             <HardDrive className="w-3.5 h-3.5" />
-            已收录文件总数
+            已收录文件数
           </p>
-          <p className="text-2xl font-bold text-blue-600 mt-1">
-            {totalFiles} <span className="text-xs font-normal text-slate-400">({formatSize(totalBytes)})</span>
+          <p className="text-lg sm:text-2xl font-bold text-blue-600 mt-0.5 sm:mt-1">
+            {totalFiles} <span className="text-xs font-normal text-slate-400 hidden sm:inline">({formatSize(totalBytes)})</span>
           </p>
         </div>
       </div>
 
       {/* Filter and Action Header */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-4">
+      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-3 sm:space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <ListChecks className="w-5 h-5 text-blue-600" />
-            <h2 className="text-base font-bold text-slate-900">115 分享链接爬取状态监控</h2>
+            <ListChecks className="w-5 h-5 text-blue-600 shrink-0" />
+            <h2 className="text-sm sm:text-base font-bold text-slate-900">115 分享链接爬取状态监控</h2>
             <span className="text-xs text-slate-400">({filteredShares.length} 条)</span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
             <div className="relative flex-1 sm:w-64">
               <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
               <input 
@@ -217,12 +217,12 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                 placeholder="搜索分享代码或标题..."
                 value={searchKw}
                 onChange={(e) => setSearchKw(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full pl-8 pr-3 py-2 sm:py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none min-h-[38px] sm:min-h-[auto]"
               />
             </div>
             <button
               onClick={onOpenImport}
-              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs shrink-0"
+              className="px-3.5 py-2 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs shrink-0 min-h-[38px] sm:min-h-[auto] active:scale-95"
             >
               <PlusCircle className="w-3.5 h-3.5" />
               提交新链接
@@ -230,12 +230,12 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
           </div>
         </div>
 
-        {/* Filter Pills */}
-        <div className="flex flex-wrap items-center gap-2 text-xs border-t border-slate-100 pt-3">
-          <span className="text-slate-400 font-medium">状态筛选:</span>
+        {/* Filter Pills with horizontal scroll on mobile */}
+        <div className="flex items-center gap-2 text-xs border-t border-slate-100 pt-2.5 overflow-x-auto pb-1 sm:pb-0 text-nowrap scrollbar-none">
+          <span className="text-slate-400 font-medium shrink-0">状态:</span>
           <button
             onClick={() => setFilterStatus(null)}
-            className={`px-3 py-1 rounded-lg transition font-semibold ${
+            className={`px-3 py-1.5 rounded-lg transition font-semibold shrink-0 ${
               filterStatus === null
                 ? 'bg-slate-800 text-white'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -245,7 +245,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
           </button>
           <button
             onClick={() => setFilterStatus(0)}
-            className={`px-3 py-1 rounded-lg transition font-semibold flex items-center gap-1 ${
+            className={`px-3 py-1.5 rounded-lg transition font-semibold flex items-center gap-1 shrink-0 ${
               filterStatus === 0
                 ? 'bg-amber-600 text-white'
                 : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
@@ -256,7 +256,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
           </button>
           <button
             onClick={() => setFilterStatus(1)}
-            className={`px-3 py-1 rounded-lg transition font-semibold ${
+            className={`px-3 py-1.5 rounded-lg transition font-semibold shrink-0 ${
               filterStatus === 1
                 ? 'bg-emerald-600 text-white'
                 : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
@@ -266,7 +266,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
           </button>
           <button
             onClick={() => setFilterStatus(2)}
-            className={`px-3 py-1 rounded-lg transition font-semibold ${
+            className={`px-3 py-1.5 rounded-lg transition font-semibold shrink-0 ${
               filterStatus === 2
                 ? 'bg-rose-600 text-white'
                 : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
@@ -277,22 +277,22 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
         </div>
 
         {/* Batch Operations & Export Toolbar */}
-        <div className="bg-slate-50/90 rounded-xl p-3 border border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="bg-slate-50/90 rounded-xl p-2.5 sm:p-3 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           {/* Left: Selection controls */}
           <div className="flex items-center gap-2 flex-wrap">
-            <label className="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700 select-none hover:text-slate-900 transition">
+            <label className="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700 select-none hover:text-slate-900 transition min-h-[32px]">
               <input 
                 type="checkbox" 
                 checked={isAllSelected}
                 onChange={toggleSelectAll}
                 className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
               />
-              <span>全选筛选结果</span>
+              <span>全选</span>
             </label>
 
             <button 
               onClick={invertSelection}
-              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md transition font-medium shadow-2xs"
+              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md transition font-medium shadow-2xs min-h-[30px]"
               title="反向选择当前列表项"
             >
               反选
@@ -300,10 +300,10 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
 
             {selectedShareCodes.length > 0 ? (
               <span className="px-2.5 py-1 bg-blue-100/80 text-blue-800 font-bold rounded-md border border-blue-200">
-                已选中 {selectedShareCodes.length} 项
+                已选 {selectedShareCodes.length} 项
               </span>
             ) : (
-              <span className="text-slate-400 pl-1">
+              <span className="text-slate-400 pl-1 hidden sm:inline">
                 (勾选卡片复选框可进行批量操作或配置导出)
               </span>
             )}
@@ -313,55 +313,55 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                 onClick={() => setSelectedShareCodes([])}
                 className="text-xs text-slate-500 hover:text-rose-600 underline font-medium ml-1 transition"
               >
-                清空选择
+                清空
               </button>
             )}
           </div>
 
           {/* Right: Action Buttons */}
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
             {/* Batch Re-crawl */}
             <button 
               onClick={handleBatchReCrawl}
               disabled={selectedShareCodes.length === 0 || batchCrawling}
-              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 sm:flex-none justify-center px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px]"
               title={selectedShareCodes.length === 0 ? "请先勾选需要重新抓取的分享" : "一键批量重新抓取已勾选的分享链接"}
             >
               <RotateCw className={`w-3.5 h-3.5 ${batchCrawling ? 'animate-spin' : ''}`} />
-              <span>{batchCrawling ? '重新入队中...' : `批量重新抓取 (${selectedShareCodes.length})`}</span>
+              <span>{batchCrawling ? '入队中...' : `批量重爬 (${selectedShareCodes.length})`}</span>
             </button>
 
             {/* Export Selected JSON */}
             <button 
               onClick={() => handleExport(true)}
               disabled={selectedShareCodes.length === 0}
-              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 sm:flex-none justify-center px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px]"
               title="将选中的分享记录导出为 JSON 备份配置"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>导出选中配置 ({selectedShareCodes.length})</span>
+              <span>导出选中 ({selectedShareCodes.length})</span>
             </button>
 
             {/* Sync Root Titles */}
             <button 
               onClick={handleSyncTitles}
               disabled={syncingTitles}
-              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px]"
               title="自动扫描并使用已抓取的根目录名称更新分享任务标题，消除雷同标题"
             >
               <FolderTree className={`w-3.5 h-3.5 ${syncingTitles ? 'animate-spin' : ''}`} />
-              <span>{syncingTitles ? '正在同步标题...' : '同步根目录标题'}</span>
+              <span>{syncingTitles ? '同步中...' : '同步根目录名'}</span>
             </button>
 
             {/* Export All JSON */}
             <button 
               onClick={() => handleExport(false)}
               disabled={shares.length === 0}
-              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px]"
               title="导出全部分享任务为标准 JSON 文件"
             >
               <FileJson className="w-3.5 h-3.5 text-slate-500" />
-              <span>导出全量配置</span>
+              <span>导出全量</span>
             </button>
           </div>
         </div>
@@ -379,7 +379,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
             return (
               <div
                 key={s.id}
-                className={`rounded-2xl p-4 sm:p-5 border transition shadow-xs hover:border-slate-300 flex items-start gap-3.5 ${
+                className={`rounded-2xl p-3.5 sm:p-5 border transition shadow-xs hover:border-slate-300 flex items-start gap-2.5 sm:gap-3.5 ${
                   isSelected ? 'border-blue-400 bg-blue-50/25 ring-1 ring-blue-400/40' : 'bg-white border-slate-200'
                 }`}
               >
@@ -394,25 +394,25 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                   />
                 </div>
 
-                <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                   {/* Left Metadata */}
-                  <div className="space-y-2 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                  <div className="space-y-1.5 sm:space-y-2 flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                       {/* Status Tag */}
                       {isPending ? (
-                        <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5">
                           <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
                           抓取中 / 待调度
                         </span>
                       ) : s.status === 1 ? (
-                        <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                        <span className="px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
                           <CheckCircle className="w-3.5 h-3.5" />
-                          抓取完成 (有效)
+                          抓取完成
                         </span>
                       ) : (
-                        <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1">
+                        <span className="px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1">
                           <AlertTriangle className="w-3.5 h-3.5" />
-                          密码错误 / 链接已失效
+                          密码错误 / 失效
                         </span>
                       )}
 
@@ -422,41 +422,41 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
 
                       {s.receive_code ? (
                         <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md font-mono font-semibold">
-                          提取码: {s.receive_code}
+                          密码: {s.receive_code}
                         </span>
                       ) : (
-                        <span className="text-xs text-slate-400">无提取码</span>
+                        <span className="text-xs text-slate-400">无密码</span>
                       )}
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base font-bold text-slate-900 truncate max-w-xl" title={s.title}>
+                      <h3 className="text-sm sm:text-base font-bold text-slate-900 break-all sm:truncate max-w-xl" title={s.title}>
                         {s.title}
                       </h3>
                       {s.folder_count > 0 && !s.title.startsWith("115 分享 (") && (
-                        <span className="shrink-0 px-2 py-0.5 text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-md flex items-center gap-1">
+                        <span className="shrink-0 px-1.5 py-0.2 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-md flex items-center gap-1">
                           <span>📂 根目录</span>
                         </span>
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-0.5">
-                      <span>📁 包含文件: <strong className="text-slate-800">{s.file_count}</strong> 个</span>
-                      <span>📂 目录层级: <strong className="text-slate-800">{s.folder_count}</strong> 个</span>
-                      <span>📦 资源总大小: <strong className="text-slate-800">{formatSize(s.total_size)}</strong></span>
+                    <div className="flex flex-wrap items-center gap-x-3 sm:gap-x-4 gap-y-1 text-xs text-slate-500 pt-0.5">
+                      <span>📁 文件: <strong className="text-slate-800">{s.file_count}</strong></span>
+                      <span>📂 目录: <strong className="text-slate-800">{s.folder_count}</strong></span>
+                      <span>📦 大小: <strong className="text-slate-800">{formatSize(s.total_size)}</strong></span>
                       {s.last_crawled_at && (
-                        <span>🕒 上次遍历: <span className="text-slate-600">{s.last_crawled_at}</span></span>
+                        <span className="hidden sm:inline">🕒 上次: <span className="text-slate-600">{s.last_crawled_at}</span></span>
                       )}
                     </div>
                   </div>
 
                   {/* Right Actions */}
-                  <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap self-end sm:self-center shrink-0">
+                  <div className="flex items-center justify-between sm:justify-start gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
                     {/* Manual Start / Retry Crawl button */}
                     <button
                       id={`btn-crawl-${s.share_code}`}
                       onClick={() => onTriggerCrawl(s.share_code, s.receive_code)}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs ${
+                      className={`flex-1 sm:flex-none justify-center px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs min-h-[38px] active:scale-95 ${
                         isPending
                           ? 'bg-amber-600 hover:bg-amber-700 text-white'
                           : 'bg-blue-600 hover:bg-blue-700 text-white'
@@ -466,12 +466,12 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                       {isPending ? (
                         <>
                           <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>{s.file_count > 0 ? '继续断点续传' : '立即开始抓取'}</span>
+                          <span>{s.file_count > 0 ? '续传' : '开始'}</span>
                         </>
                       ) : (
                         <>
                           <Play className="w-3.5 h-3.5" />
-                          <span>断点续传/重爬</span>
+                          <span>重爬/续传</span>
                         </>
                       )}
                     </button>
@@ -479,21 +479,21 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                     {/* View Tree */}
                     <button
                       onClick={() => onOpenTree(s.share_code)}
-                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition"
+                      className="px-2.5 sm:px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition min-h-[38px] active:scale-95"
                       title="打开层级目录树浏览"
                     >
                       <FolderTree className="w-3.5 h-3.5 text-slate-500" />
-                      <span>目录树</span>
+                      <span>目录</span>
                     </button>
 
                     {/* Search files in this share */}
                     <button
                       onClick={() => onSearchByShare(s.share_code)}
-                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition"
+                      className="px-2.5 sm:px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition min-h-[38px] active:scale-95"
                       title="在搜索页检索该分享内的所有文件"
                     >
                       <Search className="w-3.5 h-3.5 text-slate-500" />
-                      <span>搜文件</span>
+                      <span>检索</span>
                     </button>
 
                     {/* Direct 115 link */}
@@ -501,7 +501,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                       href={shareUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition"
+                      className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition min-w-[38px] min-h-[38px] flex items-center justify-center"
                       title="在新标签页直达 115 页面"
                     >
                       <ExternalLink className="w-4 h-4" />
@@ -512,7 +512,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
             );
           })
         ) : (
-          <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 text-slate-500">
+          <div className="text-center py-12 sm:py-16 bg-white rounded-2xl border border-slate-200 text-slate-500 p-4">
             <p className="text-base font-semibold text-slate-700">暂无符合条件的分享任务</p>
             <p className="text-xs mt-1">您可以点击上方「提交新链接」录入需要爬取的 115 分享。</p>
           </div>

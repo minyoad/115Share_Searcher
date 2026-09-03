@@ -13,7 +13,11 @@ import {
   ShieldCheck, 
   Sparkles,
   ExternalLink,
-  HardDrive
+  HardDrive,
+  Menu,
+  X,
+  SlidersHorizontal,
+  ChevronRight
 } from 'lucide-react';
 import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
 import { SearchEngineView } from './components/SearchEngineView';
@@ -32,6 +36,7 @@ export default function App() {
   const [files, setFiles] = useState<FileRecord[]>(INITIAL_FILES);
   const [treeShareCode, setTreeShareCode] = useState<string>('');
   const [toastMsg, setToastMsg] = useState<string>('');
+  const [mobileMoreOpen, setMobileMoreOpen] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -190,8 +195,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Navigation Tabs */}
-            <nav className="flex items-center space-x-1 sm:space-x-1.5 overflow-x-auto py-2">
+            {/* Desktop Navigation Tabs */}
+            <nav className="hidden md:flex items-center space-x-1 sm:space-x-1.5 overflow-x-auto py-2">
               <button
                 id="nav-search-tab"
                 onClick={() => setActiveTab('search')}
@@ -235,6 +240,19 @@ export default function App() {
               </button>
 
               <button
+                id="nav-tree-tab"
+                onClick={() => setActiveTab('tree')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  activeTab === 'tree'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                层级目录
+              </button>
+
+              <button
                 id="nav-crawler-tab"
                 onClick={() => setActiveTab('crawler')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
@@ -258,19 +276,6 @@ export default function App() {
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
                 代理池矩阵
-              </button>
-
-              <button
-                id="nav-tree-tab"
-                onClick={() => setActiveTab('tree')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'tree'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                层级目录
               </button>
 
               <button
@@ -299,12 +304,32 @@ export default function App() {
                 REST API
               </button>
             </nav>
+
+            {/* Mobile Header Right Actions */}
+            <div className="flex md:hidden items-center gap-2">
+              {pendingCount > 0 && (
+                <button
+                  onClick={() => setActiveTab('tasks')}
+                  className="px-2 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[11px] font-semibold flex items-center gap-1"
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                  {pendingCount} 任务中
+                </button>
+              )}
+              <button
+                onClick={() => setMobileMoreOpen(true)}
+                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                aria-label="打开系统与工具菜单"
+              >
+                <SlidersHorizontal className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main View Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-8">
         {activeTab === 'search' && (
           <SearchEngineView
             shares={shares}
@@ -354,25 +379,163 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-6 text-xs text-slate-500 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+      <footer className="bg-white border-t border-slate-200 py-5 text-xs text-slate-500 mt-auto pb-20 md:pb-5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+          <div className="flex items-center gap-2 flex-wrap justify-center sm:justify-start">
             <span className="font-semibold text-slate-700">115 Share Search Service</span>
             <span>·</span>
-            <span>Python 3.11 + FastAPI + PostgreSQL (pg_trgm) + Redis</span>
+            <span>Python 3.11 + FastAPI + PostgreSQL (pg_trgm)</span>
           </div>
 
-          <div className="flex items-center gap-4 text-slate-400">
-            <span>BFS Traversal Engine</span>
+          <div className="flex items-center gap-3 text-slate-400 text-[11px]">
+            <span>BFS 遍历</span>
             <span>·</span>
-            <span>OpenList / AList Compatible</span>
+            <span>OpenList / AList 节点兼容</span>
           </div>
         </div>
       </footer>
 
+      {/* Mobile Fixed Bottom Navigation Bar */}
+      <nav 
+        id="mobile-bottom-nav" 
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-1 py-1 flex items-center justify-around shadow-lg safe-area-bottom"
+      >
+        <button
+          onClick={() => setActiveTab('search')}
+          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
+            activeTab === 'search' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Search className={`w-5 h-5 ${activeTab === 'search' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+          <span>检索</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('tasks')}
+          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 relative ${
+            activeTab === 'tasks' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <div className="relative">
+            <ListChecks className={`w-5 h-5 ${activeTab === 'tasks' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+            {pendingCount > 0 && (
+              <span className="absolute -top-1 -right-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white animate-pulse"></span>
+            )}
+          </div>
+          <span>任务</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('import')}
+          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
+            activeTab === 'import' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <div className={`p-1 rounded-lg ${activeTab === 'import' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}>
+            <PlusCircle className="w-4 h-4" />
+          </div>
+          <span>提交</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('tree')}
+          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
+            activeTab === 'tree' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Layers className={`w-5 h-5 ${activeTab === 'tree' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+          <span>目录</span>
+        </button>
+
+        <button
+          onClick={() => setMobileMoreOpen(true)}
+          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 relative ${
+            ['crawler', 'proxy', 'code', 'api'].includes(activeTab) ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <SlidersHorizontal className={`w-5 h-5 ${['crawler', 'proxy', 'code', 'api'].includes(activeTab) ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+          <span>系统</span>
+          {['crawler', 'proxy', 'code', 'api'].includes(activeTab) && (
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-0.5"></span>
+          )}
+        </button>
+      </nav>
+
+      {/* Mobile More Sheet / Drawer */}
+      {mobileMoreOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex flex-col justify-end md:hidden animate-in fade-in"
+          onClick={() => setMobileMoreOpen(false)}
+        >
+          <div 
+            className="bg-white rounded-t-2xl p-5 border-t border-slate-200 space-y-4 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-4 rounded bg-blue-600"></div>
+                <h3 className="font-bold text-slate-900 text-sm">系统工具与工程组件</h3>
+              </div>
+              <button 
+                onClick={() => setMobileMoreOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg min-w-[36px] min-h-[36px] flex items-center justify-center"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                onClick={() => { setActiveTab('crawler'); setMobileMoreOpen(false); }}
+                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                  activeTab === 'crawler' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <FolderTree className="w-4 h-4 text-blue-600" />
+                <span className="text-xs font-bold">爬虫引擎状态</span>
+                <span className="text-[10px] text-slate-400">BFS 递归与抓取拓扑</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTab('proxy'); setMobileMoreOpen(false); }}
+                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                  activeTab === 'proxy' ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-bold">代理池矩阵</span>
+                <span className="text-[10px] text-slate-400">IP 轮换与反封禁策略</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTab('code'); setMobileMoreOpen(false); }}
+                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                  activeTab === 'code' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <FileCode className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-bold">项目完整源码</span>
+                <span className="text-[10px] text-slate-400">FastAPI/Worker/Crawler</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTab('api'); setMobileMoreOpen(false); }}
+                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                  activeTab === 'api' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <BookOpen className="w-4 h-4 text-amber-600" />
+                <span className="text-xs font-bold">RESTful API 调试</span>
+                <span className="text-[10px] text-slate-400">Swagger 交互式请求</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       {toastMsg && (
-        <div className="fixed bottom-6 right-6 bg-slate-900 text-white text-xs px-4 py-2.5 rounded-xl shadow-xl z-50 animate-bounce">
+        <div className="fixed bottom-20 md:bottom-6 right-4 sm:right-6 bg-slate-900 text-white text-xs px-4 py-2.5 rounded-xl shadow-xl z-50 animate-bounce">
           {toastMsg}
         </div>
       )}

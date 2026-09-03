@@ -109,23 +109,23 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Search Header Hero Bar */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+      <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-xs sm:shadow-sm space-y-3 sm:space-y-4">
         <div className="relative">
-          <Search className="absolute left-4 top-3.5 w-5 h-5 text-slate-400" />
+          <Search className="absolute left-3.5 sm:left-4 top-3.5 w-5 h-5 text-slate-400" />
           <input
             id="search-input"
             type="text"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="输入全路径关键词 (例如：4K, 流浪地球, Interstellar, 架构师, Hi-Res, FLAC, DDIA)..."
-            className="w-full pl-12 pr-10 py-3.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 text-base"
+            placeholder="输入全路径关键词 (例如：4K, 流浪地球, Interstellar, 架构师, Hi-Res, FLAC)..."
+            className="w-full pl-11 sm:pl-12 pr-14 py-3 sm:py-3.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 text-sm sm:text-base min-h-[46px]"
           />
           {keyword && (
             <button
               onClick={() => setKeyword('')}
-              className="absolute right-4 top-3.5 text-slate-400 hover:text-slate-600 text-sm font-medium"
+              className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 px-2 py-1 text-xs font-medium bg-slate-100 rounded-md"
             >
               清空
             </button>
@@ -133,10 +133,10 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
         </div>
 
         {/* Filters Controls Row */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs border-t border-slate-100">
-          {/* Extension Filters */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold text-slate-500 flex items-center gap-1 mr-1">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs border-t border-slate-100">
+          {/* Extension Filters with horizontal swipe on mobile */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap text-nowrap scrollbar-none">
+            <span className="font-semibold text-slate-500 flex items-center gap-1 mr-1 shrink-0">
               <Filter className="w-3.5 h-3.5" />
               后缀:
             </span>
@@ -144,7 +144,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
               <button
                 key={ext}
                 onClick={() => setSelectedExt(selectedExt === ext ? '' : ext)}
-                className={`px-2.5 py-1 rounded-full font-medium transition ${
+                className={`px-2.5 py-1 rounded-full font-medium transition shrink-0 ${
                   selectedExt === ext
                     ? 'bg-blue-600 text-white shadow-xs'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -156,7 +156,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             {selectedExt && (
               <button
                 onClick={() => setSelectedExt('')}
-                className="text-blue-600 hover:underline font-medium ml-1"
+                className="text-blue-600 hover:underline font-medium ml-1 shrink-0"
               >
                 重置
               </button>
@@ -164,7 +164,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           </div>
 
           {/* Size Range & IsDir Toggles */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
             <div className="flex items-center bg-slate-100 p-0.5 rounded-lg">
               <button
                 onClick={() => setIsDirFilter(false)}
@@ -183,7 +183,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             <select
               value={sizeFilter}
               onChange={(e) => setSizeFilter(e.target.value as any)}
-              className="px-2.5 py-1.5 bg-slate-100 text-slate-700 rounded-lg border-0 focus:ring-1 focus:ring-blue-500 text-xs font-medium"
+              className="px-2.5 py-1.5 bg-slate-100 text-slate-700 rounded-lg border-0 focus:ring-1 focus:ring-blue-500 text-xs font-medium cursor-pointer"
             >
               <option value="all">体积不限</option>
               <option value="small">&lt; 100 MB</option>
@@ -196,13 +196,13 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
       </div>
 
       {/* Results Header Info */}
-      <div className="flex items-center justify-between text-xs text-slate-500 px-1">
-        <span className="flex items-center gap-1.5">
-          <Database className="w-3.5 h-3.5 text-blue-600" />
-          PostgreSQL 索引中收录：<strong className="text-slate-800 font-semibold">{files.length}</strong> 个节点，当前匹配：
-          <strong className="text-blue-600 font-bold">{searchResults.length}</strong> 条结果
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-slate-500 px-1">
+        <span className="flex items-center gap-1.5 flex-wrap">
+          <Database className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <span>PostgreSQL 索引收录: <strong className="text-slate-800 font-semibold">{files.length}</strong> 节点</span>
+          <span>· 当前匹配: <strong className="text-blue-600 font-bold">{searchResults.length}</strong> 条</span>
         </span>
-        <span className="text-[11px] text-slate-400">
+        <span className="text-[11px] text-slate-400 hidden sm:inline">
           支持 pg_trgm GIN 三元倒排模糊索引与全路径路径下钻
         </span>
       </div>
@@ -217,81 +217,81 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             return (
               <div
                 key={item.id}
-                className="bg-white rounded-xl p-4 sm:p-5 border border-slate-200 hover:border-blue-300 shadow-sm hover:shadow transition space-y-3"
+                className="bg-white rounded-xl p-3.5 sm:p-5 border border-slate-200 hover:border-blue-300 shadow-xs hover:shadow transition space-y-3"
               >
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
                   {/* Left Info */}
-                  <div className="flex items-start gap-3 flex-1 min-w-0">
-                    <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 shrink-0">
+                  <div className="flex items-start gap-2.5 sm:gap-3 flex-1 min-w-0">
+                    <div className="p-2 sm:p-2.5 bg-slate-50 rounded-xl border border-slate-100 shrink-0">
                       {getFileIcon(item.extension, item.is_dir)}
                     </div>
 
-                    <div className="space-y-1.5 flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700">
+                    <div className="space-y-1 sm:space-y-1.5 flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                        <span className="px-1.5 sm:px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700 shrink-0">
                           {item.is_dir ? 'DIR 目录' : item.extension || 'FILE'}
                         </span>
-                        <h3 className="text-sm sm:text-base font-bold text-slate-900 truncate" title={item.name}>
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900 break-all sm:truncate" title={item.name}>
                           {item.name}
                         </h3>
                       </div>
 
-                      <div className="text-xs text-slate-500 font-mono truncate flex items-center gap-1">
-                        <span className="text-slate-400">路径:</span>
-                        <span className="text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
+                      <div className="text-xs text-slate-500 font-mono flex items-center gap-1 flex-wrap">
+                        <span className="text-slate-400 shrink-0">路径:</span>
+                        <span className="text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 break-all text-[11px] sm:text-xs">
                           {item.full_path}
                         </span>
                       </div>
 
                       {/* Metadata Row */}
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 pt-1">
+                      <div className="flex flex-wrap items-center gap-x-3 sm:gap-x-4 gap-y-1 text-xs text-slate-500 pt-1">
                         {!item.is_dir && (
                           <span>
                             📦 体积: <strong className="text-slate-800 font-semibold">{formatSize(item.size)}</strong>
                           </span>
                         )}
                         {item.sha1 && (
-                          <span className="hidden sm:inline font-mono">
-                            🔑 SHA1: <span className="text-slate-700">{item.sha1.substring(0, 10)}...</span>
+                          <span className="hidden md:inline font-mono">
+                            🔑 SHA1: <span className="text-slate-700">{item.sha1.substring(0, 8)}...</span>
                           </span>
                         )}
-                        <span>
-                          📁 所属分享: <span className="text-slate-800 font-medium">{item.share_title}</span>
+                        <span className="truncate max-w-[200px] sm:max-w-xs">
+                          📁 分享: <span className="text-slate-800 font-medium">{item.share_title}</span>
                         </span>
                         {item.receive_code && (
                           <span>
-                            🔒 提取码: <code className="bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded font-mono font-semibold">{item.receive_code}</code>
+                            🔒 密码: <code className="bg-amber-50 text-amber-800 border border-amber-200 px-1 py-0.2 rounded font-mono font-semibold text-[11px]">{item.receive_code}</code>
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Right Actions */}
-                  <div className="flex flex-col items-end gap-2 shrink-0">
+                  {/* Actions Row / Column */}
+                  <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
                     <a
                       href={shareUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition"
+                      className="flex-1 sm:flex-none justify-center px-3.5 py-2 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition min-h-[38px] active:scale-95"
                     >
                       直达 115 提取
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         onClick={() => handleCopyNodeId(item.file_115_id)}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium rounded transition flex items-center gap-1"
+                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium rounded-lg transition flex items-center gap-1 min-h-[36px] active:scale-95"
                         title="复制 115 节点 ID (FID/CID) 用于 AList / OpenList 挂载"
                       >
                         {copiedId === item.file_115_id ? <Check className="w-3 h-3 text-emerald-600" /> : <Hash className="w-3 h-3 text-slate-400" />}
-                        {copiedId === item.file_115_id ? '已复制' : '复制节点 ID'}
+                        {copiedId === item.file_115_id ? '已复制' : '复制ID'}
                       </button>
 
                       <button
                         onClick={() => onOpenTree(item.share_code)}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium rounded transition flex items-center gap-1"
+                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium rounded-lg transition flex items-center gap-1 min-h-[36px] active:scale-95"
                         title="查看该分享的完整目录树结构"
                       >
                         <Layers className="w-3 h-3 text-slate-400" />
@@ -300,7 +300,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
 
                       <button
                         onClick={() => onReportShare(item.share_code)}
-                        className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition"
+                        className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition min-w-[36px] min-h-[36px] flex items-center justify-center"
                         title="上报失效链接"
                       >
                         <Flag className="w-3.5 h-3.5" />
@@ -312,7 +312,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             );
           })
         ) : (
-          <div className="bg-white rounded-2xl p-12 border border-slate-200 text-center space-y-3">
+          <div className="bg-white rounded-2xl p-8 sm:p-12 border border-slate-200 text-center space-y-3">
             <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
               <Search className="w-6 h-6" />
             </div>
