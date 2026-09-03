@@ -329,6 +329,7 @@ export default function App() {
 
         {activeTab === 'import' && (
           <ImporterView 
+            existingShares={shares}
             onImportSuccess={handleImportSuccess} 
             onNavigateToTasks={() => setActiveTab('tasks')}
           />

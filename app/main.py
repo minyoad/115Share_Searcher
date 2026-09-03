@@ -632,10 +632,11 @@ async def batch_import_shares(
             db.add(new_share)
             await db.commit()
 
-        # Enqueue background crawl task
+        # Enqueue background crawl task (with resume support)
         task_id = await enqueue_crawl_task(
             share_code=clean_code,
             receive_code=pwd,
+            resume=True,
         )
         task_ids.append(task_id)
         queued_count += 1
@@ -647,12 +648,16 @@ async def batch_import_shares(
             {"queued_count": queued_count, "task_ids": task_ids}
         )
 
+    msg_parts = [f"已成功接收 {len(payload.shares)} 条分享链接，已创建/更新并在后台队列开始抓取 {queued_count} 条。"]
+    if duplicate_count > 0:
+        msg_parts.append(f"（系统自动去重跳过了 {duplicate_count} 条已完成且已收录的重复链接）")
+
     return BatchImportTaskResult(
         total_submitted=len(payload.shares),
         tasks_queued=queued_count,
         ignored_duplicates=duplicate_count,
         task_ids=task_ids,
-        message=f"已成功接收 {len(payload.shares)} 条分享链接，已创建/更新并在后台队列开始抓取 {queued_count} 条。"
+        message=" ".join(msg_parts)
     )
 
 

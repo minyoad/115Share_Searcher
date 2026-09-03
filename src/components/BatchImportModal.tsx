@@ -12,6 +12,7 @@ import {
 import { ShareRecord, FileRecord } from '../types';
 
 interface ImporterViewProps {
+  existingShares?: ShareRecord[];
   onImportSuccess: (newShare: ShareRecord, newFiles: FileRecord[]) => void;
   onNavigateToTasks?: () => void;
 }
@@ -45,10 +46,11 @@ function parseLine(line: string) {
   };
 }
 
-export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess, onNavigateToTasks }) => {
+export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [], onImportSuccess, onNavigateToTasks }) => {
   const [inputText, setInputText] = useState(
     `https://115cdn.com/s/swnsdrk3h2m?password=p783\nhttps://115cdn.com/s/sw6tcot3hbe?password=e9d7\nhttps://115.com/s/sw34kcyberpunk?password=cp77`
   );
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [successLogs, setSuccessLogs] = useState<string[]>([]);
 
@@ -69,15 +71,32 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess, onN
 
   const validCount = parsedItems.filter(i => i.valid).length;
 
+  const getExistingShare = (shareCode: string) => {
+    if (!shareCode) return null;
+    return existingShares.find(s => s.share_code.toLowerCase() === shareCode.toLowerCase()) || null;
+  };
+
   const handleSimulateImport = () => {
     if (validCount === 0) return;
     setIsProcessing(true);
     setSuccessLogs([]);
 
     setTimeout(() => {
+      let importedCount = 0;
+      let skippedCount = 0;
+      const logs: string[] = [];
+
       parsedItems.forEach((item, index) => {
         if (!item.valid) return;
 
+        const existing = getExistingShare(item.shareCode);
+        if (existing && existing.status === 1 && existing.file_count > 0 && skipDuplicates) {
+          skippedCount++;
+          logs.push(`跳过已收录且抓取完成的分享（去重）：${item.shareCode} (${existing.file_count} 个文件)`);
+          return;
+        }
+
+        importedCount++;
         const mockShareId = Date.now() + index;
         const newShare: ShareRecord = {
           id: mockShareId,
@@ -141,9 +160,13 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess, onN
         ];
 
         onImportSuccess(newShare, newFiles);
+        logs.push(`已成功推入 Redis 队列并由 Worker 完成索引：${item.shareCode}`);
       });
 
-      setSuccessLogs(parsedItems.filter(i => i.valid).map(i => `已成功推入 Redis 队列并由 Worker 完成索引：${i.shareCode}`));
+      setSuccessLogs([
+        `已成功处理 ${validCount} 条链接：入队/更新 ${importedCount} 条${skippedCount > 0 ? `，自动去重跳过 ${skippedCount} 条已完成分享` : ''}`,
+        ...logs
+      ]);
       setIsProcessing(false);
       setInputText('');
     }, 800);
@@ -196,53 +219,86 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ onImportSuccess, onN
           />
         </div>
 
-        {/* Real-time Parsed Preview */}
+        {/* Real-time Parsed Preview with Existence Detection */}
         <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
           <div className="flex items-center justify-between text-xs">
             <span className="font-semibold text-slate-700 flex items-center gap-1.5">
               <Sparkles className="w-4 h-4 text-amber-500" />
               实时正则解析器预览 ({parsedItems.length} 行，有效 {validCount} 条)
             </span>
+            <span className="text-[11px] text-slate-500">
+              系统检测: <strong className="text-emerald-700">{parsedItems.filter(p => p.valid && !!getExistingShare(p.shareCode)).length}</strong> 条已存在
+              {parsedItems.filter(p => p.valid && !getExistingShare(p.shareCode)).length > 0 && (
+                <span> · <strong className="text-blue-700">{parsedItems.filter(p => p.valid && !getExistingShare(p.shareCode)).length}</strong> 条为新链接</span>
+              )}
+            </span>
           </div>
 
           <div className="space-y-1.5 max-h-48 overflow-y-auto">
-            {parsedItems.map((item, idx) => (
-              <div
-                key={idx}
-                className={`p-2 rounded-lg text-xs font-mono flex items-center justify-between border ${
-                  item.valid
-                    ? 'bg-white border-slate-200 text-slate-800'
-                    : 'bg-rose-50 border-rose-200 text-rose-700'
-                }`}
-              >
-                <div className="flex items-center gap-2 truncate">
-                  {item.valid ? (
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                  )}
-                  <span className="truncate">{item.raw}</span>
-                </div>
-
-                {item.valid ? (
-                  <div className="flex items-center gap-2 shrink-0 text-[11px]">
-                    <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-semibold">
-                      CODE: {item.shareCode}
-                    </span>
-                    {item.receiveCode ? (
-                      <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-semibold">
-                        PWD: {item.receiveCode}
-                      </span>
+            {parsedItems.map((item, idx) => {
+              const existing = item.valid ? getExistingShare(item.shareCode) : null;
+              return (
+                <div
+                  key={idx}
+                  className={`p-2 rounded-lg text-xs font-mono flex items-center justify-between border ${
+                    item.valid
+                      ? 'bg-white border-slate-200 text-slate-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    {item.valid ? (
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                     ) : (
-                      <span className="text-slate-400">无密码</span>
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
                     )}
+                    <span className="truncate">{item.raw}</span>
                   </div>
-                ) : (
-                  <span className="text-[10px] text-rose-600 font-sans shrink-0">格式不符</span>
-                )}
-              </div>
-            ))}
+
+                  {item.valid ? (
+                    <div className="flex items-center gap-2 shrink-0 text-[11px]">
+                      <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-semibold">
+                        CODE: {item.shareCode}
+                      </span>
+                      {item.receiveCode ? (
+                        <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-semibold">
+                          PWD: {item.receiveCode}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">无密码</span>
+                      )}
+                      {existing ? (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-sans font-medium">
+                          ✓ 已收录 ({existing.status === 1 ? '抓取完成' : '待处理'} · {existing.file_count}文件)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-sans font-medium">
+                          ★ 新链接
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-[10px] text-rose-600 font-sans shrink-0">格式不符</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
+        </div>
+
+        {/* Deduplication Option */}
+        <div className="pt-1">
+          <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none bg-slate-50 hover:bg-slate-100 px-3 py-2 rounded-xl border border-slate-200 transition">
+            <input 
+              type="checkbox" 
+              checked={skipDuplicates}
+              onChange={(e) => setSkipDuplicates(e.target.checked)}
+              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+            />
+            <span className="font-medium text-slate-800">
+              智能去重: 若分享链接已存在且已抓取完成，自动跳过 (防重复消耗 115 API 配额)
+            </span>
+          </label>
         </div>
 
         {/* Action Button */}

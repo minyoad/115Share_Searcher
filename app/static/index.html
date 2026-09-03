@@ -884,19 +884,53 @@
           class="w-full p-4 rounded-xl border border-slate-300 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
         ></textarea>
 
-        <!-- Parsed preview lines -->
-        <div v-if="parsedPreviewList.length > 0" class="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
-          <span class="font-semibold text-slate-600">已识别 {{ parsedPreviewList.length }} 条有效分享:</span>
-          <div class="space-y-1 max-h-32 overflow-y-auto">
-            <div v-for="(p, idx) in parsedPreviewList" :key="idx" class="flex items-center justify-between font-mono text-[11px] bg-white p-1.5 rounded border border-slate-100">
-              <span class="font-bold text-blue-700">CODE: {{ p.share_code }}</span>
-              <span class="text-amber-700">{{ p.receive_code ? '密码: ' + p.receive_code : '无密码' }}</span>
+        <!-- Parsed preview lines with Existence Detection -->
+        <div v-if="parsedPreviewList.length > 0" class="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-xs">
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-slate-700">已识别 {{ parsedPreviewList.length }} 条有效分享链接:</span>
+            <span class="text-[11px] text-slate-500">
+              系统检测: <strong class="text-emerald-700">{{ parsedPreviewList.filter(p => !!getExistingShareInfo(p.share_code)).length }}</strong> 条已存在
+              <span v-if="parsedPreviewList.filter(p => !getExistingShareInfo(p.share_code)).length > 0">
+                · <strong class="text-blue-700">{{ parsedPreviewList.filter(p => !getExistingShareInfo(p.share_code)).length }}</strong> 条为新链接
+              </span>
+            </span>
+          </div>
+          <div class="space-y-1.5 max-h-40 overflow-y-auto">
+            <div v-for="(p, idx) in parsedPreviewList" :key="idx" class="flex items-center justify-between font-mono text-[11px] bg-white p-2 rounded-lg border border-slate-100">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-blue-700">CODE: {{ p.share_code }}</span>
+                <span class="text-amber-700">{{ p.receive_code ? '密码: ' + p.receive_code : '无密码' }}</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span v-if="getExistingShareInfo(p.share_code)" class="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-sans font-medium">
+                  ✓ 已收录 ({{ getExistingShareInfo(p.share_code).status === 1 ? '已抓取完成' : '待处理/抓取中' }} · {{ getExistingShareInfo(p.share_code).file_count }}文件)
+                </span>
+                <span v-else class="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-sans font-medium">
+                  ★ 新链接 (未入库)
+                </span>
+              </div>
             </div>
           </div>
         </div>
 
+        <!-- Options: Deduplication / Skip Existing -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+          <label class="flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none bg-slate-50 hover:bg-slate-100 px-3 py-2 rounded-xl border border-slate-200 transition">
+            <input 
+              type="checkbox" 
+              v-model="importSkipDuplicates"
+              class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+            />
+            <span class="font-medium text-slate-800">
+              智能去重: 若分享链接已存在且已抓取完成，自动跳过 (防重复消耗 115 API 配额)
+            </span>
+          </label>
+        </div>
+
         <div class="flex items-center justify-between pt-2">
-          <span class="text-xs text-slate-400">推入队列后将立即进入爬虫调度</span>
+          <span class="text-xs text-slate-400">
+            {{ importSkipDuplicates ? '去重模式开启：已抓取完成的任务将自动跳过，仅入队新链接或未完成任务' : '强制模式：全部链接推入队列并以断点续传方式更新' }}
+          </span>
           <button 
             type="submit"
             :disabled="importLoading || parsedPreviewList.length === 0"
@@ -909,13 +943,17 @@
       </form>
 
       <div v-if="importResult" class="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs space-y-2">
-        <p class="font-bold">✅ {{ importResult.message }}</p>
-        <p class="text-emerald-700">
-          提交总数: {{ importResult.total_submitted }} | 队列任务数: {{ importResult.tasks_queued }}
-        </p>
+        <p class="font-bold text-sm">✅ {{ importResult.message }}</p>
+        <div class="flex items-center gap-4 text-emerald-700 flex-wrap font-medium">
+          <span>提交总数: <strong>{{ importResult.total_submitted }}</strong></span>
+          <span>已入队/更新: <strong>{{ importResult.tasks_queued }}</strong></span>
+          <span v-if="importResult.ignored_duplicates > 0" class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200 font-semibold">
+            已存在且跳过去重: {{ importResult.ignored_duplicates }}
+          </span>
+        </div>
         <button 
           @click="switchToTasks()"
-          class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition"
+          class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition text-xs flex items-center gap-1 mt-1"
         >
           查看抓取任务与实时状态 ➔
         </button>
@@ -1390,6 +1428,7 @@
         const importText = ref('https://115cdn.com/s/swnsdrk3h2m?password=p783\nhttps://115cdn.com/s/sw6tcot3hbe?password=e9d7');
         const importLoading = ref(false);
         const importResult = ref(null);
+        const importSkipDuplicates = ref(true);
         const toastMessage = ref('');
         let pollTimer = null;
 
@@ -1681,6 +1720,12 @@
           }
           return list;
         });
+
+        const getExistingShareInfo = (shareCode) => {
+          if (!sharesList.value || !shareCode) return null;
+          const clean = shareCode.trim().toLowerCase();
+          return sharesList.value.find(s => s.share_code && s.share_code.toLowerCase() === clean) || null;
+        };
 
         const doSearch = async (targetPage = 1) => {
           if (!query.value.keyword.trim()) return;
@@ -2079,7 +2124,7 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 shares: parsedPreviewList.value,
-                force_crawl: true 
+                force_crawl: !importSkipDuplicates.value 
               })
             });
 
@@ -2195,6 +2240,8 @@
           searchByShare,
           switchToTasks,
           submitBatchImport,
+          importSkipDuplicates,
+          getExistingShareInfo,
           recoveringStuck,
           recoverStuckTasks,
           seedingDemo,
