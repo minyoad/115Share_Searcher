@@ -255,9 +255,17 @@
       <!-- Controls & Filter -->
       <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-4">
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <span class="text-sm font-bold text-slate-800">分享状态列表</span>
             <span class="text-xs text-slate-500">({{ sharesTotal }} 条)</span>
+            <span v-if="wsConnected" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200" title="WebSocket 长连接已连接，实时双向推送，无轮询开销">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              WS 实时监控中 (0轮询)
+            </span>
+            <span v-else class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="WebSocket 正在尝试连接">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
+              WS 重连中...
+            </span>
           </div>
           
           <div class="flex items-center gap-2">
@@ -1517,9 +1525,108 @@
           }
         };
 
+        // ---------------------------------------------------------
+        // WebSocket Real-time Tasks & Status Monitor
+        // ---------------------------------------------------------
+        const wsConnected = ref(false);
+        let socket = null;
+        let wsReconnectTimer = null;
+        let wsHeartbeatTimer = null;
+
+        const sendWsMessage = (msgObj) => {
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(msgObj));
+            return true;
+          }
+          return false;
+        };
+
+        const syncWsSubscription = () => {
+          sendWsMessage({
+            type: 'subscribe',
+            page: sharesPage.value,
+            page_size: 20,
+            status: shareStatusFilter.value
+          });
+        };
+
+        const connectWebSocket = () => {
+          try {
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+              return;
+            }
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/tasks`;
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+              wsConnected.value = true;
+              console.log('[WS] Connected to 115 Share Task Monitor WebSocket');
+              syncWsSubscription();
+
+              // Start heartbeat ping every 25 seconds
+              if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+              wsHeartbeatTimer = setInterval(() => {
+                sendWsMessage({ type: 'ping' });
+              }, 25000);
+            };
+
+            socket.onmessage = (event) => {
+              try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'connected' && msg.data) {
+                  sharesList.value = msg.data.items;
+                  sharesTotal.value = msg.data.total;
+                  sharesTotalPages.value = msg.data.total_pages;
+                  sharesStats.value = msg.data.stats;
+                } else if (msg.type === 'shares_data' && msg.data) {
+                  sharesList.value = msg.data.items;
+                  sharesTotal.value = msg.data.total;
+                  sharesTotalPages.value = msg.data.total_pages;
+                  sharesStats.value = msg.data.stats;
+                } else if (msg.type === 'task_event') {
+                  if (msg.event === 'all_tasks_completed') {
+                    showToast('🎉 所有后台爬虫任务已全部抓取并索引完成！');
+                  }
+                }
+              } catch (parseErr) {
+                console.error('[WS] Parse message error:', parseErr);
+              }
+            };
+
+            socket.onclose = () => {
+              wsConnected.value = false;
+              if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+              // Auto reconnect after 3 seconds
+              if (!wsReconnectTimer) {
+                wsReconnectTimer = setTimeout(() => {
+                  wsReconnectTimer = null;
+                  connectWebSocket();
+                }, 3000);
+              }
+            };
+
+            socket.onerror = (err) => {
+              wsConnected.value = false;
+              try { socket.close(); } catch(e) {}
+            };
+          } catch (e) {
+            console.warn('[WS] WebSocket init failed, fallback to HTTP', e);
+            wsConnected.value = false;
+          }
+        };
+
         const loadShares = async (targetPage = 1) => {
           sharesLoading.value = true;
           sharesPage.value = targetPage;
+
+          // If WebSocket is active, request target page over WebSocket (instant, 0 HTTP overhead)
+          if (wsConnected.value) {
+            syncWsSubscription();
+            sharesLoading.value = false;
+            return;
+          }
+
           try {
             const params = new URLSearchParams({
               page: targetPage.toString(),
@@ -1545,7 +1652,12 @@
 
         const filterShareStatus = (status) => {
           shareStatusFilter.value = status;
-          loadShares(1);
+          sharesPage.value = 1;
+          if (wsConnected.value) {
+            syncWsSubscription();
+          } else {
+            loadShares(1);
+          }
         };
 
         const triggerCrawl = async (shareCode, receiveCode) => {
@@ -1560,7 +1672,11 @@
             if (!res.ok) throw new Error('Trigger crawl failed');
             const data = await res.json();
             showToast(`已开始爬取任务：${shareCode}`);
-            await loadShares(sharesPage.value);
+            if (wsConnected.value) {
+              syncWsSubscription();
+            } else {
+              await loadShares(sharesPage.value);
+            }
           } catch (err) {
             showToast('触发爬取失败: ' + err.message);
           } finally {
@@ -1576,7 +1692,11 @@
 
         const switchToTasks = () => {
           activeTab.value = 'tasks';
-          loadShares(1);
+          if (wsConnected.value) {
+            syncWsSubscription();
+          } else {
+            loadShares(1);
+          }
         };
 
         const recoveringStuck = ref(false);
@@ -1590,7 +1710,11 @@
             const data = await res.json();
             if (res.ok) {
               showToast(data.message || '已完成死锁任务扫描与恢复！');
-              await loadShares(1);
+              if (wsConnected.value) {
+                syncWsSubscription();
+              } else {
+                await loadShares(1);
+              }
             } else {
               showToast('恢复死锁任务失败: ' + (data.detail || '未知错误'));
             }
@@ -1621,7 +1745,11 @@
             const data = await res.json();
             importResult.value = data;
             showToast('已成功推入抓取队列！');
-            loadShares(1);
+            if (wsConnected.value) {
+              syncWsSubscription();
+            } else {
+              loadShares(1);
+            }
           } catch (err) {
             showToast('提交失败: ' + err.message);
           } finally {
@@ -1630,21 +1758,38 @@
         };
 
         onMounted(() => {
-          loadShares(1);
-          fetchProxyStatus();
-          // Auto poll if on tasks/proxy tab or if pending tasks exist
-          pollTimer = setInterval(() => {
-            if (activeTab.value === 'tasks' || (sharesStats.value && sharesStats.value.pending_shares > 0)) {
-              loadShares(sharesPage.value);
+          // Connect WebSocket immediately for real-time push (0 HTTP polling)
+          connectWebSocket();
+
+          // Fallback initial load if WS takes more than 800ms
+          setTimeout(() => {
+            if (!wsConnected.value && sharesList.value.length === 0) {
+              loadShares(1);
             }
+          }, 800);
+
+          fetchProxyStatus();
+
+          // Maintenance timer: ONLY polls proxy tab if user is on proxy tab,
+          // and only falls back to slow HTTP share poll if WebSocket is disconnected!
+          pollTimer = setInterval(() => {
             if (activeTab.value === 'proxy') {
               fetchProxyStatus();
             }
-          }, 3000);
+            // Fallback HTTP only when WebSocket is DISCONNECTED
+            if (!wsConnected.value && activeTab.value === 'tasks' && sharesStats.value && sharesStats.value.pending_shares > 0) {
+              loadShares(sharesPage.value);
+            }
+          }, 10000);
         });
 
         onUnmounted(() => {
           if (pollTimer) clearInterval(pollTimer);
+          if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+          if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+          if (socket) {
+            try { socket.close(); } catch(e) {}
+          }
         });
 
         return {
@@ -1711,6 +1856,7 @@
           submitBatchImport,
           recoveringStuck,
           recoverStuckTasks,
+          wsConnected,
         };
       }
     }).mount('#app');

@@ -1,10 +1,12 @@
+import asyncio
+import json
 import logging
 import math
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +34,7 @@ from app.schemas import (
     format_size,
 )
 from app.worker import enqueue_crawl_task
+from app.ws import TaskWebSocketManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,15 +45,28 @@ logger = logging.getLogger("app.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for DB schema init and clean teardown"""
+    """Lifespan context manager for DB schema init, Proxy subsystem, and WebSocket task workers"""
     logger.info("Application starting up... Initializing DB...")
     await init_db()
     # Initialize Proxy Subsystem with DB Persistence
     proxy_mgr = ProxyManager.get_instance()
     await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
+
+    # Initialize WebSocket Manager background tasks
+    stop_event = asyncio.Event()
+    ws_manager = TaskWebSocketManager.get_instance()
+    redis_listener_task = asyncio.create_task(ws_manager.start_redis_listener(stop_event))
+    active_monitor_task = asyncio.create_task(ws_manager.start_active_monitor_loop(stop_event))
+
     yield
-    logger.info("Application shutting down...")
+
+    logger.info("Application shutting down... Cleaning up background tasks...")
+    stop_event.set()
+    redis_listener_task.cancel()
+    active_monitor_task.cancel()
+    await asyncio.gather(redis_listener_task, active_monitor_task, return_exceptions=True)
+    logger.info("WebSocket and background workers shut down cleanly.")
 
 
 app = FastAPI(
@@ -92,6 +108,77 @@ async def health_check():
         "service": settings.PROJECT_NAME,
         "version": settings.PROJECT_VERSION,
     }
+
+
+@app.websocket("/ws/tasks")
+@app.websocket("/ws/shares")
+async def websocket_tasks_endpoint(websocket: WebSocket):
+    """
+    WebSocket 实时任务与抓取状态监控长连接：
+    - 连接建立后立即推送当前任务列表与全局统计数据快照
+    - 客户端可通过 JSON 消息动态调整分页与状态筛选 ({"type": "subscribe", "page": 1, "page_size": 20, "status": 0})
+    - 客户端可发送 {"type": "refresh"} 立即请求当前页面快照刷新
+    - 客户端可发送心跳 {"type": "ping"}，服务端回复 {"type": "pong"}
+    - 彻底避免客户端以短轮询 (polling) 方式高频访问 /api/v1/shares
+    """
+    ws_manager = TaskWebSocketManager.get_instance()
+    await ws_manager.connect(websocket)
+    try:
+        # 连接成功后立即向该客户端推送第 1 页快照
+        initial_data = await ws_manager.fetch_shares_snapshot(page=1, page_size=20)
+        await websocket.send_json({
+            "type": "connected",
+            "message": "Connected to 115 Share Task Monitor WebSocket",
+            "data": initial_data,
+        })
+
+        while True:
+            raw_text = await websocket.receive_text()
+            if not raw_text:
+                continue
+
+            try:
+                msg = json.loads(raw_text)
+                msg_type = msg.get("type", "")
+
+                if msg_type == "subscribe":
+                    # 客户端切换了页码、每页数量或状态筛选
+                    ws_manager.update_subscription(websocket, msg)
+                    p = msg.get("page", 1)
+                    ps = msg.get("page_size", 20)
+                    st = msg.get("status", None)
+                    kw = msg.get("keyword", None)
+                    snapshot = await ws_manager.fetch_shares_snapshot(page=p, page_size=ps, status_filter=st, keyword=kw)
+                    await websocket.send_json({
+                        "type": "shares_data",
+                        "data": snapshot,
+                    })
+
+                elif msg_type == "refresh":
+                    # 客户端主动请求刷新当前订阅页面
+                    sub = ws_manager.subscriptions.get(websocket, {})
+                    snapshot = await ws_manager.fetch_shares_snapshot(
+                        page=sub.get("page", 1),
+                        page_size=sub.get("page_size", 20),
+                        status_filter=sub.get("status", None),
+                        keyword=sub.get("keyword", None),
+                    )
+                    await websocket.send_json({
+                        "type": "shares_data",
+                        "data": snapshot,
+                    })
+
+                elif msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+
+            except json.JSONDecodeError:
+                pass
+
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception as exc:
+        logger.debug(f"[WS-Endpoint] WebSocket closed: {exc}")
+        ws_manager.disconnect(websocket)
 
 
 @app.get(
@@ -226,6 +313,12 @@ async def trigger_share_crawl(
         receive_code=effective_pwd,
     )
 
+    # Notify WebSocket clients in real-time
+    await TaskWebSocketManager.get_instance().notify_task_event(
+        "task_enqueued",
+        {"share_code": clean_code, "task_id": task_id, "status": 0}
+    )
+
     return TriggerCrawlResponse(
         share_code=clean_code,
         task_id=task_id,
@@ -289,6 +382,13 @@ async def batch_import_shares(
         )
         task_ids.append(task_id)
         queued_count += 1
+
+    # Notify WebSocket clients about newly queued items
+    if queued_count > 0:
+        await TaskWebSocketManager.get_instance().notify_task_event(
+            "batch_imported",
+            {"queued_count": queued_count, "task_ids": task_ids}
+        )
 
     return BatchImportTaskResult(
         total_submitted=len(payload.shares),
@@ -531,6 +631,12 @@ async def report_invalid_share(
     share_obj.status = new_status
     await db.commit()
 
+    # Notify WebSocket clients in real-time
+    await TaskWebSocketManager.get_instance().notify_task_event(
+        "share_reported",
+        {"share_code": share_code, "status": new_status}
+    )
+
     return ReportShareResponse(
         share_code=share_code,
         status=new_status,
@@ -663,6 +769,13 @@ async def manual_recover_stuck_tasks(
     """
     from app.worker import recover_stuck_pending_shares
     count = await recover_stuck_pending_shares(timeout_seconds=timeout_seconds)
+
+    if count > 0:
+        await TaskWebSocketManager.get_instance().notify_task_event(
+            "tasks_recovered",
+            {"recovered_count": count}
+        )
+
     return {
         "status": "success",
         "recovered_count": count,

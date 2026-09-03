@@ -55,6 +55,16 @@ async def enqueue_crawl_task(share_code: str, receive_code: str = "") -> str:
     }
     await client.lpush(settings.QUEUE_NAME, json.dumps(payload))
     logger.info(f"Enqueued crawl task {task_id} for share_code={share_code}")
+
+    # Publish real-time task enqueued event via Redis Pub/Sub for WebSockets
+    try:
+        await client.publish(
+            settings.WS_CHANNEL_NAME,
+            json.dumps({"event_type": "task_enqueued", "data": {"share_code": share_code, "task_id": task_id}})
+        )
+    except Exception as notify_err:
+        logger.debug(f"Could not publish WS task_enqueued: {notify_err}")
+
     return task_id
 
 
@@ -161,6 +171,16 @@ async def process_task(task_data: dict, crawler: Crawler115Engine) -> None:
     receive_code = task_data.get("receive_code", "")
 
     logger.info(f"Processing task {task_id}: share_code={share_code}")
+
+    client = await get_redis_client()
+    try:
+        await client.publish(
+            settings.WS_CHANNEL_NAME,
+            json.dumps({"event_type": "task_started", "data": {"share_code": share_code, "task_id": task_id}})
+        )
+    except Exception:
+        pass
+
     async with AsyncSessionLocal() as session:
         try:
             await crawler.crawl_and_index(
@@ -169,14 +189,49 @@ async def process_task(task_data: dict, crawler: Crawler115Engine) -> None:
                 receive_code=receive_code
             )
             logger.info(f"Task {task_id} completed successfully for {share_code}")
+            try:
+                await client.publish(
+                    settings.WS_CHANNEL_NAME,
+                    json.dumps({"event_type": "task_completed", "data": {"share_code": share_code, "task_id": task_id, "status": 1}})
+                )
+            except Exception:
+                pass
         except ShareExpiredOrInvalidError as err:
             logger.warning(f"Task {task_id} share expired or extraction code invalid for {share_code}: {err}")
+            try:
+                await client.publish(
+                    settings.WS_CHANNEL_NAME,
+                    json.dumps({"event_type": "task_expired", "data": {"share_code": share_code, "task_id": task_id, "status": 2}})
+                )
+            except Exception:
+                pass
         except ShareBannedError as err:
             logger.warning(f"Task {task_id} share banned or blocked for {share_code}: {err}")
+            try:
+                await client.publish(
+                    settings.WS_CHANNEL_NAME,
+                    json.dumps({"event_type": "task_banned", "data": {"share_code": share_code, "task_id": task_id, "status": 3}})
+                )
+            except Exception:
+                pass
         except ShareCrawlerError as err:
             logger.warning(f"Task {task_id} crawler business error for {share_code}: {err}")
+            try:
+                await client.publish(
+                    settings.WS_CHANNEL_NAME,
+                    json.dumps({"event_type": "task_error", "data": {"share_code": share_code, "task_id": task_id, "error": str(err)}})
+                )
+            except Exception:
+                pass
         except Exception as exc:
             logger.error(f"Task {task_id} failed unexpectedly for {share_code}: {exc}", exc_info=True)
+            try:
+                await client.publish(
+                    settings.WS_CHANNEL_NAME,
+                    json.dumps({"event_type": "task_failed", "data": {"share_code": share_code, "task_id": task_id, "error": str(exc)}})
+                )
+            except Exception:
+                pass
 
 
 async def worker_loop(worker_id: int, stop_event: asyncio.Event) -> None:

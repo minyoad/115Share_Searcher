@@ -28,6 +28,7 @@ class Settings(BaseSettings):
         description="Redis connection URL for task queue & caching"
     )
     QUEUE_NAME: str = "115_share_crawl_queue"
+    WS_CHANNEL_NAME: str = "115_share_ws_events"
 
     # 115 Crawler Engine Settings (Optimized for High Throughput & Proxy Pool Rotation)
     CRAWLER_USER_AGENT: str = (
