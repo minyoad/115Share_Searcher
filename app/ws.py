@@ -184,7 +184,13 @@ class TaskWebSocketManager:
             if conditions:
                 data_stmt = data_stmt.where(*conditions)
 
-            share_rows = (await db.execute(data_stmt)).scalars().all()
+            try:
+                share_rows = (await db.execute(data_stmt)).scalars().all()
+            except Exception as q_exc:
+                logger.warning(f"[WS-Manager] fetch_shares_snapshot query failed ({q_exc}), running schema compatibility migration...")
+                from app.database import ensure_database_schema_compatibility
+                await ensure_database_schema_compatibility()
+                share_rows = (await db.execute(data_stmt)).scalars().all()
             items = []
             for row in share_rows:
                 try:

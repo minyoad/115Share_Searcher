@@ -231,7 +231,7 @@ async def list_shares(
         count_stmt = count_stmt.where(*conditions)
     filtered_total = (await db.execute(count_stmt)).scalar() or 0
 
-    # Data query
+    # Data query with auto-migration retry if columns were missing in legacy DB
     offset = (page - 1) * page_size
     data_stmt = (
         select(Share)
@@ -242,23 +242,34 @@ async def list_shares(
     if conditions:
         data_stmt = data_stmt.where(*conditions)
 
-    share_rows = (await db.execute(data_stmt)).scalars().all()
+    try:
+        share_rows = (await db.execute(data_stmt)).scalars().all()
+    except Exception as query_exc:
+        logger.warning(f"[list_shares] Initial query failed ({query_exc}), running schema compatibility migration...")
+        from app.database import ensure_database_schema_compatibility
+        await ensure_database_schema_compatibility()
+        # Retry query after migration
+        share_rows = (await db.execute(data_stmt)).scalars().all()
 
-    items = [
-        ShareInfo(
-            id=s.id,
-            share_code=s.share_code,
-            receive_code=s.receive_code or "",
-            title=s.title or f"115 分享 ({s.share_code})",
-            file_count=s.file_count,
-            folder_count=s.folder_count,
-            total_size=s.total_size,
-            status=s.status,
-            last_crawled_at=s.last_crawled_at,
-            created_at=s.created_at,
-        )
-        for s in share_rows
-    ]
+    items = []
+    for s in share_rows:
+        try:
+            items.append(
+                ShareInfo(
+                    id=s.id,
+                    share_code=s.share_code or "",
+                    receive_code=getattr(s, "receive_code", "") or "",
+                    title=getattr(s, "title", "") or f"115 分享 ({s.share_code})",
+                    file_count=getattr(s, "file_count", 0) or 0,
+                    folder_count=getattr(s, "folder_count", 0) or 0,
+                    total_size=getattr(s, "total_size", 0) or 0,
+                    status=getattr(s, "status", 0) if getattr(s, "status", None) is not None else 0,
+                    last_crawled_at=getattr(s, "last_crawled_at", None),
+                    created_at=getattr(s, "created_at", None),
+                )
+            )
+        except Exception as row_exc:
+            logger.warning(f"[list_shares] Error parsing share row {getattr(s, 'id', None)}: {row_exc}")
 
     total_pages = math.ceil(filtered_total / page_size) if filtered_total > 0 else 0
 
@@ -326,6 +337,21 @@ async def trigger_share_crawl(
         status="QUEUED",
         message=f"已成功触发爬取任务 (Task ID: {task_id})，Worker 将立即开始遍历抓取！"
     )
+
+
+@app.post(
+    "/api/v1/shares/seed-demo",
+    summary="一键初始化/载入示例分享与文件树数据",
+)
+async def seed_demo_shares():
+    """
+    一键载入初始示例 115 分享资源（4K 原盘、计算机经典图书、无损音乐精选），
+    快速恢复/初始化任务列表与搜索索引。
+    """
+    from app.seed import seed_initial_demo_data
+    res = await seed_initial_demo_data(force=True)
+    await TaskWebSocketManager.get_instance().broadcast_full_update()
+    return res
 
 
 @app.post(

@@ -127,17 +127,35 @@ class ShareInfo(BaseModel):
     """分享元数据"""
     id: int
     share_code: str
-    receive_code: str
-    title: str
-    file_count: int
-    folder_count: int
-    total_size: int
+    receive_code: str = ""
+    title: str = ""
+    file_count: int = 0
+    folder_count: int = 0
+    total_size: int = 0
     total_size_formatted: str = ""
-    status: int
+    status: int = 0
     status_desc: str = ""
     last_crawled_at: Optional[datetime] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
     share_url: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_null_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if data.get("receive_code") is None:
+                data["receive_code"] = ""
+            if data.get("title") is None:
+                data["title"] = f"115 分享 ({data.get('share_code', '')})"
+            if data.get("file_count") is None:
+                data["file_count"] = 0
+            if data.get("folder_count") is None:
+                data["folder_count"] = 0
+            if data.get("total_size") is None:
+                data["total_size"] = 0
+            if data.get("status") is None:
+                data["status"] = 0
+        return data
 
     @model_validator(mode="after")
     def compute_fields(self) -> "ShareInfo":

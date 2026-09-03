@@ -35,18 +35,18 @@ class Share(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     share_code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    receive_code: Mapped[str] = mapped_column(String(32), default="", nullable=False)
-    title: Mapped[str] = mapped_column(String(512), default="", nullable=False)
-    file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    folder_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    total_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    status: Mapped[int] = mapped_column(SmallInteger, default=ShareStatus.PENDING.value, nullable=False, index=True)
+    receive_code: Mapped[str] = mapped_column(String(32), default="", nullable=True)
+    title: Mapped[str] = mapped_column(String(512), default="", nullable=True)
+    file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=True)
+    folder_count: Mapped[int] = mapped_column(Integer, default=0, nullable=True)
+    total_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=True)
+    status: Mapped[int] = mapped_column(SmallInteger, default=ShareStatus.PENDING.value, nullable=True, index=True)
     
     last_crawled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        nullable=False
+        nullable=True
     )
 
     # 关联文件集合 (级联删除)

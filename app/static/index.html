@@ -281,6 +281,14 @@
               <span>{{ recoveringStuck ? '扫描恢复中...' : '🛡️ 检查并恢复死锁' }}</span>
             </button>
             <button 
+              @click="seedDemoData"
+              :disabled="seedingDemo"
+              class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold rounded-lg transition flex items-center gap-1 disabled:opacity-50"
+              title="一键载入初始示例分享数据 (4K影视 / 计算机图书 / Hi-Res无损音乐)"
+            >
+              <span>{{ seedingDemo ? '载入中...' : '📦 载入示例数据' }}</span>
+            </button>
+            <button 
               @click="loadShares(sharesPage)"
               :disabled="sharesLoading"
               class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition flex items-center gap-1 disabled:opacity-50"
@@ -328,6 +336,20 @@
             ⚠️ 密码错误 / 失效
           </button>
         </div>
+      </div>
+
+      <!-- Error Alert Banner -->
+      <div v-if="sharesLoadError" class="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center justify-between gap-3 shadow-xs">
+        <div class="flex items-center gap-2">
+          <span class="text-base">⚠️</span>
+          <span class="font-medium">{{ sharesLoadError }}</span>
+        </div>
+        <button 
+          @click="loadShares(sharesPage)" 
+          class="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-lg transition shrink-0"
+        >
+          立即重试
+        </button>
       </div>
 
       <!-- Share Task Cards List -->
@@ -451,9 +473,46 @@
         </div>
       </div>
 
-      <div v-else-if="!sharesLoading" class="text-center py-16 bg-white rounded-2xl border border-slate-200 text-slate-500">
-        <p class="text-base font-medium text-slate-700">暂无符合条件的分享任务</p>
-        <p class="text-xs mt-1">您可以点击右上角「提交新链接」开始收录 115 资源。</p>
+      <!-- Empty State with One-Click Seed Demo Button -->
+      <div v-else-if="!sharesLoading" class="text-center py-12 px-6 bg-white rounded-2xl border border-slate-200 text-slate-500 max-w-2xl mx-auto space-y-4 shadow-xs">
+        <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center text-xl">
+          📋
+        </div>
+        <div>
+          <p class="text-base font-bold text-slate-800">暂无符合条件的分享任务</p>
+          <p class="text-xs text-slate-500 mt-1 max-w-md mx-auto leading-relaxed">
+            {{ shareStatusFilter !== null ? '当前筛选状态下没有匹配的任务。您可以切换为「全部」查看，或点击下方载入示例数据。' : '当前 PostgreSQL 数据库尚未收录分享链接。您可以一键载入开箱即用的优质示例分享，或批量提交您自己的 115 链接。' }}
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
+          <button 
+            v-if="shareStatusFilter !== null"
+            @click="filterShareStatus(null)" 
+            class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition"
+          >
+            显示全部任务
+          </button>
+          <button 
+            @click="seedDemoData" 
+            :disabled="seedingDemo"
+            class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <span>📦</span> {{ seedingDemo ? '正在初始化载入...' : '一键载入示例分享数据 (4K/图书/音乐)' }}
+          </button>
+          <button 
+            @click="activeTab = 'import'" 
+            class="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition shadow-sm flex items-center gap-1.5"
+          >
+            <span>➕</span> 批量提交新链接
+          </button>
+          <button 
+            @click="loadShares(1)" 
+            :disabled="sharesLoading"
+            class="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition flex items-center gap-1"
+          >
+            <span>🔄</span> 重新查询
+          </button>
+        </div>
       </div>
     </section>
 
@@ -1213,6 +1272,7 @@
         const sharesTotalPages = ref(0);
         const sharesStats = ref({});
         const sharesLoading = ref(false);
+        const sharesLoadError = ref('');
         const shareStatusFilter = ref(null);
         const triggeringCode = ref('');
 
@@ -1609,6 +1669,11 @@
               console.warn(`[WS] Disconnected (code=${event.code}, reason=${event.reason || 'none'})`);
               wsReconnectAttempts.value++;
 
+              // Fallback fetch via HTTP if list was empty
+              if (sharesList.value.length === 0) {
+                loadShares(sharesPage.value);
+              }
+
               // Progressive backoff reconnection: 3s, 5s, 8s, max 12s
               const delay = Math.min(12000, 3000 + Math.min(wsReconnectAttempts.value, 5) * 1500);
               if (!wsReconnectTimer) {
@@ -1626,6 +1691,7 @@
           } catch (e) {
             console.warn('[WS] WebSocket init failed, fallback to HTTP', e);
             wsConnected.value = false;
+            loadShares(1);
           }
         };
 
@@ -1633,11 +1699,9 @@
           sharesLoading.value = true;
           sharesPage.value = targetPage;
 
-          // If WebSocket is active, request target page over WebSocket (instant, 0 HTTP overhead)
+          // If WebSocket is open, also sync subscription so server knows client parameters
           if (wsConnected.value) {
             syncWsSubscription();
-            sharesLoading.value = false;
-            return;
           }
 
           try {
@@ -1645,32 +1709,49 @@
               page: targetPage.toString(),
               page_size: '20'
             });
-            if (shareStatusFilter.value !== null) {
+            if (shareStatusFilter.value !== null && shareStatusFilter.value !== undefined) {
               params.append('status', shareStatusFilter.value.toString());
             }
 
             const res = await fetch(`/api/v1/shares?${params.toString()}`);
-            if (!res.ok) throw new Error('Failed to load shares');
+            if (!res.ok) {
+              const errBody = await res.json().catch(() => ({}));
+              throw new Error(errBody.detail || `HTTP ${res.status}`);
+            }
             const data = await res.json();
-            sharesList.value = data.items;
-            sharesTotal.value = data.total;
-            sharesTotalPages.value = data.total_pages;
-            sharesStats.value = data.stats;
+            sharesList.value = data.items || [];
+            sharesTotal.value = data.total || 0;
+            sharesTotalPages.value = data.total_pages || 0;
+            if (data.stats) sharesStats.value = data.stats;
+            sharesLoadError.value = '';
           } catch (err) {
             console.error('loadShares error', err);
+            sharesLoadError.value = '获取任务列表失败: ' + (err.message || '网络或接口异常');
           } finally {
             sharesLoading.value = false;
+          }
+        };
+
+        const seedingDemo = ref(false);
+        const seedDemoData = async () => {
+          seedingDemo.value = true;
+          try {
+            const res = await fetch('/api/v1/shares/seed-demo', { method: 'POST' });
+            if (!res.ok) throw new Error('载入示例数据失败');
+            const data = await res.json();
+            showToast(data.message || '已成功载入初始示例分享！');
+            await loadShares(1);
+          } catch (err) {
+            showToast('载入示例失败: ' + err.message);
+          } finally {
+            seedingDemo.value = false;
           }
         };
 
         const filterShareStatus = (status) => {
           shareStatusFilter.value = status;
           sharesPage.value = 1;
-          if (wsConnected.value) {
-            syncWsSubscription();
-          } else {
-            loadShares(1);
-          }
+          loadShares(1);
         };
 
         const triggerCrawl = async (shareCode, receiveCode) => {
@@ -1705,11 +1786,7 @@
 
         const switchToTasks = () => {
           activeTab.value = 'tasks';
-          if (wsConnected.value) {
-            syncWsSubscription();
-          } else {
-            loadShares(1);
-          }
+          loadShares(1);
         };
 
         const recoveringStuck = ref(false);
@@ -1771,15 +1848,11 @@
         };
 
         onMounted(() => {
-          // Connect WebSocket immediately for real-time push (0 HTTP polling)
-          connectWebSocket();
+          // Immediately load initial shares list via standard HTTP
+          loadShares(1);
 
-          // Fallback initial load if WS takes more than 800ms
-          setTimeout(() => {
-            if (!wsConnected.value && sharesList.value.length === 0) {
-              loadShares(1);
-            }
-          }, 800);
+          // Connect WebSocket for real-time live events and push
+          connectWebSocket();
 
           fetchProxyStatus();
 
@@ -1821,6 +1894,7 @@
           sharesTotalPages,
           sharesStats,
           sharesLoading,
+          sharesLoadError,
           shareStatusFilter,
           wsConnected,
           wsReconnectAttempts,
@@ -1871,6 +1945,8 @@
           submitBatchImport,
           recoveringStuck,
           recoverStuckTasks,
+          seedingDemo,
+          seedDemoData,
           wsConnected,
         };
       }
