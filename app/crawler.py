@@ -446,7 +446,11 @@ class Crawler115Engine:
         visited_cids: Set[str] = set()
         visited_lock = asyncio.Lock()
 
-        extracted_meta = {"title": None}
+        extracted_meta: Dict[str, Any] = {
+            "title": None,
+            "root_dirs": [],
+            "root_files": [],
+        }
         stats = {"files": 0, "folders": 0, "bytes": 0}
         stats_lock = asyncio.Lock()
         fatal_error: List[Optional[Exception]] = [None]
@@ -526,18 +530,18 @@ class Crawler115Engine:
                         )
 
                         data_payload = snap_data.get("data", {})
-
-                        if not extracted_meta["title"]:
-                            share_info = data_payload.get("share_info", {})
-                            title = (
-                                share_info.get("share_title")
-                                or share_info.get("title")
-                                or data_payload.get("share_title")
-                                or data_payload.get("user_name")
-                                or f"115 分享 ({share_code})"
-                            )
-                            extracted_meta["title"] = title
-                            share_obj.title = title
+                        share_info = data_payload.get("share_info") or data_payload.get("shareinfo") or {}
+                        
+                        api_title = (
+                            share_info.get("share_title")
+                            or share_info.get("file_name")
+                            or share_info.get("title")
+                            or data_payload.get("share_title")
+                            or data_payload.get("file_name")
+                        )
+                        if api_title and not extracted_meta["title"]:
+                            extracted_meta["title"] = str(api_title).strip()
+                            share_obj.title = extracted_meta["title"]
 
                         item_list = data_payload.get("list", [])
                         total_in_dir = data_payload.get("count", len(item_list))
@@ -557,6 +561,13 @@ class Crawler115Engine:
                             node_id = str(raw_cid if is_directory else raw_fid)
                             item_size = int(item.get("s", 0) or 0)
                             item_sha1 = str(item.get("sha1", "") or "").lower()
+
+                            # 记录第一级根目录项与根文件，用于精准推导任务标题
+                            if current_cid == "0":
+                                if is_directory:
+                                    extracted_meta["root_dirs"].append(item_name)
+                                else:
+                                    extracted_meta["root_files"].append(item_name)
 
                             normalized_path = posixpath.normpath(
                                 posixpath.join(current_virtual_path, item_name)
@@ -719,6 +730,50 @@ class Crawler115Engine:
             await db_write_queue.put(None)
             await db_write_queue.join()
             await db_writer_task
+
+            # 抓取完成后，优先使用抓取到的根目录信息作为任务标题，彻底取代雷同无区分度的 '115 分享 (xxxx)'
+            current_title = str(getattr(share_obj, "title", "") or "").strip()
+            is_generic = (
+                not current_title
+                or current_title.startswith("115 分享 (")
+                or current_title == "115 分享"
+            )
+            if is_generic:
+                new_title = ""
+                root_dirs = extracted_meta.get("root_dirs", [])
+                root_files = extracted_meta.get("root_files", [])
+                if root_dirs:
+                    if len(root_dirs) == 1:
+                        new_title = root_dirs[0].strip()
+                    else:
+                        new_title = f"{root_dirs[0].strip()} 等{len(root_dirs)}个目录"
+                elif root_files:
+                    new_title = root_files[0].strip()
+                else:
+                    # 从数据库已入库文件中查询根节点 (parent_115_id='0')
+                    root_q = await db.execute(
+                        select(File.name, File.is_dir)
+                        .where(File.share_id == share_obj.id, File.parent_115_id == "0")
+                        .order_by(File.is_dir.desc(), File.id.asc())
+                        .limit(1)
+                    )
+                    r_row = root_q.first()
+                    if r_row and r_row[0]:
+                        new_title = r_row[0].strip()
+                    else:
+                        any_q = await db.execute(
+                            select(File.name)
+                            .where(File.share_id == share_obj.id)
+                            .order_by(File.is_dir.desc(), func.length(File.full_path).asc(), File.id.asc())
+                            .limit(1)
+                        )
+                        a_row = any_q.first()
+                        if a_row and a_row[0]:
+                            new_title = a_row[0].strip()
+
+                if new_title:
+                    share_obj.title = new_title
+                    logger.info(f"[Crawler] Set share {share_code} title to root directory: '{new_title}'")
 
             share_obj.status = ShareStatus.ACTIVE.value
             share_obj.file_count = stats["files"]

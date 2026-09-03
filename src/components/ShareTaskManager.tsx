@@ -46,6 +46,26 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [selectedShareCodes, setSelectedShareCodes] = useState<string[]>([]);
   const [batchCrawling, setBatchCrawling] = useState(false);
+  const [syncingTitles, setSyncingTitles] = useState(false);
+
+  const handleSyncTitles = async () => {
+    try {
+      setSyncingTitles(true);
+      const resp = await fetch('/api/v1/shares/sync-root-titles', { method: 'POST' });
+      if (resp.ok) {
+        const data = await resp.json();
+        alert(data.message || '已成功同步根目录标题！');
+        window.location.reload();
+      } else {
+        alert('同步根目录标题请求失败');
+      }
+    } catch (err) {
+      console.error('Failed to sync root titles:', err);
+      alert('同步发生错误: ' + String(err));
+    } finally {
+      setSyncingTitles(false);
+    }
+  };
 
   const formatSize = (bytes: number) => {
     if (bytes <= 0) return '0 B';
@@ -322,6 +342,17 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               <span>导出选中配置 ({selectedShareCodes.length})</span>
             </button>
 
+            {/* Sync Root Titles */}
+            <button 
+              onClick={handleSyncTitles}
+              disabled={syncingTitles}
+              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="自动扫描并使用已抓取的根目录名称更新分享任务标题，消除雷同标题"
+            >
+              <FolderTree className={`w-3.5 h-3.5 ${syncingTitles ? 'animate-spin' : ''}`} />
+              <span>{syncingTitles ? '正在同步标题...' : '同步根目录标题'}</span>
+            </button>
+
             {/* Export All JSON */}
             <button 
               onClick={() => handleExport(false)}
@@ -398,9 +429,16 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                       )}
                     </div>
 
-                    <h3 className="text-base font-bold text-slate-900 truncate" title={s.title}>
-                      {s.title}
-                    </h3>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-base font-bold text-slate-900 truncate max-w-xl" title={s.title}>
+                        {s.title}
+                      </h3>
+                      {s.folder_count > 0 && !s.title.startsWith("115 分享 (") && (
+                        <span className="shrink-0 px-2 py-0.5 text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-md flex items-center gap-1">
+                          <span>📂 根目录</span>
+                        </span>
+                      )}
+                    </div>
 
                     <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-0.5">
                       <span>📁 包含文件: <strong className="text-slate-800">{s.file_count}</strong> 个</span>

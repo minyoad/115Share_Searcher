@@ -409,6 +409,17 @@
               <span :class="exportingConfig ? 'animate-spin' : ''">📑</span>
               <span>导出全部配置</span>
             </button>
+
+            <!-- Sync Root Titles Button -->
+            <button 
+              @click="syncRootTitles"
+              :disabled="syncingTitles"
+              class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold rounded-lg transition shadow-2xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="扫描并使用已抓取的根目录名称更新所有分享任务标题，消除雷同标题"
+            >
+              <span :class="syncingTitles ? 'animate-spin' : ''">📂</span>
+              <span>{{ syncingTitles ? '同步标题中...' : '同步根目录标题' }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -487,9 +498,17 @@
                 <span v-else class="text-xs text-slate-400">无提取码</span>
               </div>
 
-              <h3 class="text-base font-semibold text-slate-900 truncate" :title="s.title">
-                {{ s.title }}
-              </h3>
+              <div class="flex items-center gap-2 flex-wrap">
+                <h3 class="text-base font-semibold text-slate-900 truncate max-w-xl" :title="s.title">
+                  {{ s.title }}
+                </h3>
+                <span 
+                  v-if="s.folder_count > 0 && s.title && !s.title.startsWith('115 分享 (')" 
+                  class="shrink-0 px-2 py-0.5 text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-md flex items-center gap-1"
+                >
+                  📂 根目录
+                </span>
+              </div>
 
               <div class="flex flex-wrap items-center gap-3 sm:gap-5 text-xs text-slate-500 pt-0.5">
                 <span>📁 包含文件: <strong class="text-slate-800">{{ s.file_count }}</strong> 个</span>
@@ -1851,6 +1870,22 @@
           }
         };
 
+        const syncingTitles = ref(false);
+        const syncRootTitles = async () => {
+          syncingTitles.value = true;
+          try {
+            const res = await fetch('/api/v1/shares/sync-root-titles', { method: 'POST' });
+            if (!res.ok) throw new Error('同步请求失败');
+            const data = await res.json();
+            showToast(data.message || '已成功同步根目录标题！');
+            await loadShares(sharesPage.value);
+          } catch (err) {
+            showToast('同步失败: ' + err.message);
+          } finally {
+            syncingTitles.value = false;
+          }
+        };
+
         const filterShareStatus = (status) => {
           shareStatusFilter.value = status;
           sharesPage.value = 1;
@@ -2167,6 +2202,8 @@
           selectedShareCodes,
           batchCrawling,
           exportingConfig,
+          syncingTitles,
+          syncRootTitles,
           isAllPageSelected,
           toggleSelectAllPage,
           invertSelection,

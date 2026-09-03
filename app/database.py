@@ -75,12 +75,46 @@ async def ensure_database_schema_compatibility() -> None:
                 "ALTER TABLE shares ADD COLUMN IF NOT EXISTS last_crawled_at TIMESTAMPTZ;",
                 "ALTER TABLE shares ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();",
                 "UPDATE shares SET receive_code = '' WHERE receive_code IS NULL;",
-                "UPDATE shares SET title = CONCAT('115 分享 (', share_code, ')') WHERE title IS NULL OR title = '';",
                 "UPDATE shares SET file_count = 0 WHERE file_count IS NULL;",
                 "UPDATE shares SET folder_count = 0 WHERE folder_count IS NULL;",
                 "UPDATE shares SET total_size = 0 WHERE total_size IS NULL;",
                 "UPDATE shares SET status = 0 WHERE status IS NULL;",
                 "UPDATE shares SET created_at = COALESCE(last_crawled_at, NOW()) WHERE created_at IS NULL;",
+                # 优先使用已经抓取到的根目录 (parent_115_id = '0') 名字回填分享任务标题，消除雷同的 '115 分享 (xxxx)' 默认占位
+                """
+                UPDATE shares s
+                SET title = sub.root_name
+                FROM (
+                    SELECT DISTINCT ON (share_id) 
+                        share_id, 
+                        name AS root_name
+                    FROM files
+                    WHERE parent_115_id = '0'
+                    ORDER BY share_id, is_dir DESC, id ASC
+                ) sub
+                WHERE s.id = sub.share_id
+                  AND sub.root_name IS NOT NULL 
+                  AND TRIM(sub.root_name) != ''
+                  AND (s.title IS NULL OR s.title = '' OR s.title LIKE '115 分享 (%)');
+                """,
+                # 次选：若无 parent_115_id='0' 则按最短路径或顶层文件回填
+                """
+                UPDATE shares s
+                SET title = sub.root_name
+                FROM (
+                    SELECT DISTINCT ON (share_id) 
+                        share_id, 
+                        name AS root_name
+                    FROM files
+                    ORDER BY share_id, is_dir DESC, id ASC
+                ) sub
+                WHERE s.id = sub.share_id
+                  AND sub.root_name IS NOT NULL 
+                  AND TRIM(sub.root_name) != ''
+                  AND (s.title IS NULL OR s.title = '' OR s.title LIKE '115 分享 (%)');
+                """,
+                # 若尚未抓取任何文件，则保留规范的默认占位标题
+                "UPDATE shares SET title = CONCAT('115 分享 (', share_code, ')') WHERE title IS NULL OR title = '';",
             ]
             for stmt in share_migrations:
                 try:

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.models import Share, ShareStatus
+from app.models import File, Share, ShareStatus
 from app.schemas import ShareInfo, format_size
 
 logger = logging.getLogger("app.ws")
@@ -213,15 +213,54 @@ class TaskWebSocketManager:
                 from app.database import ensure_database_schema_compatibility
                 await ensure_database_schema_compatibility()
                 share_rows = (await db.execute(data_stmt)).scalars().all()
+
+            # 自动提取根目录作为任务标题，消除雷同标题
+            needs_patch_ids = [
+                row.id for row in share_rows
+                if (not getattr(row, "title", None) or str(row.title).strip().startswith("115 分享 (") or str(row.title).strip() == "115 分享")
+                and (getattr(row, "file_count", 0) > 0 or getattr(row, "folder_count", 0) > 0)
+            ]
+            root_map: Dict[int, str] = {}
+            if needs_patch_ids:
+                try:
+                    stmt1 = (
+                        select(File.share_id, File.name)
+                        .distinct(File.share_id)
+                        .where(File.share_id.in_(needs_patch_ids), File.parent_115_id == "0")
+                        .order_by(File.share_id, File.is_dir.desc(), File.id.asc())
+                    )
+                    for sid, name in (await db.execute(stmt1)).all():
+                        if name and str(name).strip():
+                            root_map[sid] = str(name).strip()
+
+                    unresolved = [sid for sid in needs_patch_ids if sid not in root_map]
+                    if unresolved:
+                        stmt2 = (
+                            select(File.share_id, File.name)
+                            .distinct(File.share_id)
+                            .where(File.share_id.in_(unresolved))
+                            .order_by(File.share_id, File.is_dir.desc(), File.id.asc())
+                        )
+                        for sid, name in (await db.execute(stmt2)).all():
+                            if name and str(name).strip():
+                                root_map[sid] = str(name).strip()
+                except Exception as map_err:
+                    logger.debug(f"[WS-Manager] Error resolving root title map: {map_err}")
+
             items = []
             for row in share_rows:
                 try:
+                    effective_title = (
+                        root_map.get(row.id)
+                        or getattr(row, "title", "")
+                        or f"115 分享 ({row.share_code})"
+                    )
                     items.append(
                         ShareInfo(
                             id=int(row.id),
                             share_code=row.share_code or "",
                             receive_code=getattr(row, "receive_code", "") or "",
-                            title=getattr(row, "title", "") or "",
+                            title=effective_title,
                             file_count=int(getattr(row, "file_count", 0) or 0),
                             folder_count=int(getattr(row, "folder_count", 0) or 0),
                             total_size=int(getattr(row, "total_size", 0) or 0),

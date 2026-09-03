@@ -4,7 +4,7 @@ import logging
 import math
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -186,6 +186,69 @@ async def websocket_tasks_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 
 
+async def resolve_and_patch_root_titles(db: AsyncSession, share_rows: List[Share]) -> Dict[int, str]:
+    """
+    针对已抓取到文件/目录但标题仍为默认占位符 '115 分享 (xxxx)' 的分享，
+    自动从 files 表提取其根目录或根文件名称，并即时回填至 Share 对象和数据库持久化。
+    """
+    needs_patch_shares = [
+        s for s in share_rows
+        if (not getattr(s, "title", None) or str(s.title).strip().startswith("115 分享 (") or str(s.title).strip() == "115 分享" or not str(s.title).strip())
+        and (getattr(s, "file_count", 0) > 0 or getattr(s, "folder_count", 0) > 0)
+    ]
+    if not needs_patch_shares:
+        return {}
+
+    share_ids = [s.id for s in needs_patch_shares]
+    title_map: Dict[int, str] = {}
+
+    try:
+        # 1. 优先从 parent_115_id == '0' 查找根目录（文件夹优先排序）
+        stmt1 = (
+            select(File.share_id, File.name)
+            .distinct(File.share_id)
+            .where(File.share_id.in_(share_ids), File.parent_115_id == "0")
+            .order_by(File.share_id, File.is_dir.desc(), File.id.asc())
+        )
+        res1 = await db.execute(stmt1)
+        for sid, name in res1.all():
+            if name and str(name).strip():
+                title_map[sid] = str(name).strip()
+
+        # 2. 对未命中的记录兜底查找最浅层级的文件/目录
+        unresolved_ids = [sid for sid in share_ids if sid not in title_map]
+        if unresolved_ids:
+            stmt2 = (
+                select(File.share_id, File.name)
+                .distinct(File.share_id)
+                .where(File.share_id.in_(unresolved_ids))
+                .order_by(File.share_id, File.is_dir.desc(), File.id.asc())
+            )
+            res2 = await db.execute(stmt2)
+            for sid, name in res2.all():
+                if name and str(name).strip():
+                    title_map[sid] = str(name).strip()
+
+        # 3. 回写对象属性并异步持久化至数据库
+        dirty = False
+        for s in needs_patch_shares:
+            if s.id in title_map:
+                s.title = title_map[s.id]
+                dirty = True
+
+        if dirty:
+            try:
+                await db.commit()
+            except Exception as commit_err:
+                logger.warning(f"[resolve_and_patch_root_titles] Commit failed: {commit_err}")
+                await db.rollback()
+
+    except Exception as exc:
+        logger.warning(f"[resolve_and_patch_root_titles] Error resolving root titles: {exc}")
+
+    return title_map
+
+
 @app.get(
     "/api/v1/shares",
     response_model=ShareListResponse,
@@ -255,15 +318,19 @@ async def list_shares(
         # Retry query after migration
         share_rows = (await db.execute(data_stmt)).scalars().all()
 
+    # 自动将已经抓取到目录信息的分享标题从默认的 '115 分享 (xxxx)' 修复为真实的根目录名
+    await resolve_and_patch_root_titles(db, share_rows)
+
     items = []
     for s in share_rows:
         try:
+            effective_title = getattr(s, "title", "") or f"115 分享 ({s.share_code})"
             items.append(
                 ShareInfo(
                     id=s.id,
                     share_code=s.share_code or "",
                     receive_code=getattr(s, "receive_code", "") or "",
-                    title=getattr(s, "title", "") or f"115 分享 ({s.share_code})",
+                    title=effective_title,
                     file_count=getattr(s, "file_count", 0) or 0,
                     folder_count=getattr(s, "folder_count", 0) or 0,
                     total_size=getattr(s, "total_size", 0) or 0,
@@ -285,6 +352,38 @@ async def list_shares(
         stats=stats_payload,
         items=items,
     )
+
+
+@app.post(
+    "/api/v1/shares/sync-root-titles",
+    summary="一键同步并更新所有分享任务标题为根目录名",
+)
+async def sync_all_share_root_titles(db: AsyncSession = Depends(get_db)):
+    """
+    全量扫描数据库中所有已抓取到文件/目录但标题仍为 '115 分享 (xxxx)' 或默认占位的分享，
+    自动使用其在 files 表中的顶层根目录或文件名进行回填，并在 WebSocket 中广播刷新。
+    """
+    stmt = (
+        select(Share)
+        .where(
+            (Share.file_count > 0) | (Share.folder_count > 0),
+            (Share.title.is_(None)) | (Share.title == "") | (Share.title.like("115 分享 (%)"))
+        )
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    patched_map = await resolve_and_patch_root_titles(db, list(rows))
+
+    if patched_map:
+        await TaskWebSocketManager.get_instance().notify_task_event(
+            "titles_synced",
+            {"synced_count": len(patched_map)}
+        )
+
+    return {
+        "status": "success",
+        "synced_count": len(patched_map),
+        "message": f"成功识别并更新 {len(patched_map)} 条分享任务标题为根目录名！",
+    }
 
 
 @app.post(
