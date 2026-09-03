@@ -262,9 +262,12 @@
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
               WS 实时监控中 (0轮询)
             </span>
+            <span v-else-if="wsReconnectAttempts > 3" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200" title="WebSocket 无法保持长连接，已自动切换为 HTTP 容灾兼容模式">
+              <span>🌐</span> HTTP 容灾模式
+            </span>
             <span v-else class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="WebSocket 正在尝试连接">
               <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
-              WS 重连中...
+              WS 连接中...
             </span>
           </div>
           
@@ -1529,6 +1532,7 @@
         // WebSocket Real-time Tasks & Status Monitor
         // ---------------------------------------------------------
         const wsConnected = ref(false);
+        const wsReconnectAttempts = ref(0);
         let socket = null;
         let wsReconnectTimer = null;
         let wsHeartbeatTimer = null;
@@ -1561,6 +1565,7 @@
 
             socket.onopen = () => {
               wsConnected.value = true;
+              wsReconnectAttempts.value = 0;
               console.log('[WS] Connected to 115 Share Task Monitor WebSocket');
               syncWsSubscription();
 
@@ -1573,6 +1578,7 @@
 
             socket.onmessage = (event) => {
               try {
+                sharesLoading.value = false;
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'connected' && msg.data) {
                   sharesList.value = msg.data.items;
@@ -1594,21 +1600,28 @@
               }
             };
 
-            socket.onclose = () => {
+            socket.onclose = (event) => {
               wsConnected.value = false;
-              if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
-              // Auto reconnect after 3 seconds
+              if (wsHeartbeatTimer) {
+                clearInterval(wsHeartbeatTimer);
+                wsHeartbeatTimer = null;
+              }
+              console.warn(`[WS] Disconnected (code=${event.code}, reason=${event.reason || 'none'})`);
+              wsReconnectAttempts.value++;
+
+              // Progressive backoff reconnection: 3s, 5s, 8s, max 12s
+              const delay = Math.min(12000, 3000 + Math.min(wsReconnectAttempts.value, 5) * 1500);
               if (!wsReconnectTimer) {
                 wsReconnectTimer = setTimeout(() => {
                   wsReconnectTimer = null;
                   connectWebSocket();
-                }, 3000);
+                }, delay);
               }
             };
 
             socket.onerror = (err) => {
-              wsConnected.value = false;
-              try { socket.close(); } catch(e) {}
+              console.warn('[WS] WebSocket error observed');
+              // Avoid force closing socket directly inside onerror to prevent double close events
             };
           } catch (e) {
             console.warn('[WS] WebSocket init failed, fallback to HTTP', e);
@@ -1809,6 +1822,8 @@
           sharesStats,
           sharesLoading,
           shareStatusFilter,
+          wsConnected,
+          wsReconnectAttempts,
           triggeringCode,
           importText,
           parsedPreviewList,

@@ -126,7 +126,7 @@ async def websocket_tasks_endpoint(websocket: WebSocket):
     try:
         # 连接成功后立即向该客户端推送第 1 页快照
         initial_data = await ws_manager.fetch_shares_snapshot(page=1, page_size=20)
-        await websocket.send_json({
+        await ws_manager.safe_send_json(websocket, {
             "type": "connected",
             "message": "Connected to 115 Share Task Monitor WebSocket",
             "data": initial_data,
@@ -149,7 +149,7 @@ async def websocket_tasks_endpoint(websocket: WebSocket):
                     st = msg.get("status", None)
                     kw = msg.get("keyword", None)
                     snapshot = await ws_manager.fetch_shares_snapshot(page=p, page_size=ps, status_filter=st, keyword=kw)
-                    await websocket.send_json({
+                    await ws_manager.safe_send_json(websocket, {
                         "type": "shares_data",
                         "data": snapshot,
                     })
@@ -163,21 +163,22 @@ async def websocket_tasks_endpoint(websocket: WebSocket):
                         status_filter=sub.get("status", None),
                         keyword=sub.get("keyword", None),
                     )
-                    await websocket.send_json({
+                    await ws_manager.safe_send_json(websocket, {
                         "type": "shares_data",
                         "data": snapshot,
                     })
 
                 elif msg_type == "ping":
-                    await websocket.send_json({"type": "pong"})
+                    await ws_manager.safe_send_json(websocket, {"type": "pong"})
 
             except json.JSONDecodeError:
                 pass
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as disc:
+        logger.info(f"[WS-Endpoint] WebSocket disconnected cleanly (code={disc.code})")
         ws_manager.disconnect(websocket)
     except Exception as exc:
-        logger.debug(f"[WS-Endpoint] WebSocket closed: {exc}")
+        logger.error(f"[WS-Endpoint] WebSocket unhandled error: {exc}", exc_info=True)
         ws_manager.disconnect(websocket)
 
 

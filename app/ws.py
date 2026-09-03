@@ -31,6 +31,7 @@ class TaskWebSocketManager:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
         self.subscriptions: Dict[WebSocket, Dict[str, Any]] = {}
+        self.locks: Dict[WebSocket, asyncio.Lock] = {}
         self._redis_client: Optional[aioredis.Redis] = None
         self._last_pending_count: Optional[int] = None
 
@@ -58,6 +59,7 @@ class TaskWebSocketManager:
         """接受新的 WebSocket 客户端连接并注册默认订阅"""
         await websocket.accept()
         self.active_connections.add(websocket)
+        self.locks[websocket] = asyncio.Lock()
         self.subscriptions[websocket] = {
             "page": 1,
             "page_size": 20,
@@ -67,9 +69,10 @@ class TaskWebSocketManager:
         logger.info(f"[WS-Manager] Client connected. Total active clients: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket) -> None:
-        """移除断开的 WebSocket 连接"""
+        """移除断开的 WebSocket 连接并释放资源"""
         self.active_connections.discard(websocket)
         self.subscriptions.pop(websocket, None)
+        self.locks.pop(websocket, None)
         logger.info(f"[WS-Manager] Client disconnected. Total active clients: {len(self.active_connections)}")
 
     def update_subscription(self, websocket: WebSocket, params: Dict[str, Any]) -> None:
@@ -87,30 +90,40 @@ class TaskWebSocketManager:
         if "keyword" in params:
             sub["keyword"] = params["keyword"]
 
-    async def send_json(self, websocket: WebSocket, message: Dict[str, Any]) -> bool:
-        """向指定客户端发送 JSON 消息"""
+    async def safe_send_json(self, websocket: WebSocket, message: Dict[str, Any]) -> bool:
+        """
+        线程/协程安全的 JSON 发送器：
+        1. 使用 per-websocket asyncio.Lock 避免并发写竞争导致的 ASGI 协议冲突断开
+        2. 异常自动捕获并从连接池清理失效连接
+        """
+        if websocket not in self.active_connections:
+            return False
+
+        lock = self.locks.get(websocket)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.locks[websocket] = lock
+
         try:
-            await websocket.send_json(message)
+            async with lock:
+                await websocket.send_json(message)
             return True
         except Exception as exc:
-            logger.debug(f"[WS-Manager] Failed to send message to client: {exc}")
+            logger.warning(f"[WS-Manager] safe_send_json error (will disconnect): {exc}")
             self.disconnect(websocket)
             return False
+
+    async def send_json(self, websocket: WebSocket, message: Dict[str, Any]) -> bool:
+        """向指定客户端发送 JSON 消息 (兼容保留)"""
+        return await self.safe_send_json(websocket, message)
 
     async def broadcast(self, message: Dict[str, Any]) -> None:
         """向所有连接的客户端安全广播消息"""
         if not self.active_connections:
             return
 
-        dead_connections = set()
         for ws in list(self.active_connections):
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead_connections.add(ws)
-
-        for dead_ws in dead_connections:
-            self.disconnect(dead_ws)
+            await self.safe_send_json(ws, message)
 
     async def fetch_shares_snapshot(
         self,
@@ -121,14 +134,18 @@ class TaskWebSocketManager:
     ) -> Dict[str, Any]:
         """
         从数据库查询当前指定筛选条件下的分享列表快照与全局统计信息
+        具备全字段防 None 空指针容错保护与异常安全
         """
         async with AsyncSessionLocal() as db:
             conditions = []
             if keyword and str(keyword).strip():
                 kw = str(keyword).strip()
                 conditions.append((Share.share_code.ilike(f"%{kw}%")) | (Share.title.ilike(f"%{kw}%")))
-            if status_filter is not None:
-                conditions.append(Share.status == int(status_filter))
+            if status_filter is not None and str(status_filter).strip() != "":
+                try:
+                    conditions.append(Share.status == int(status_filter))
+                except (ValueError, TypeError):
+                    pass
 
             # 1. 全局统计
             total_shares = (await db.execute(select(func.count(Share.id)))).scalar() or 0
@@ -168,21 +185,25 @@ class TaskWebSocketManager:
                 data_stmt = data_stmt.where(*conditions)
 
             share_rows = (await db.execute(data_stmt)).scalars().all()
-            items = [
-                ShareInfo(
-                    id=row.id,
-                    share_code=row.share_code,
-                    receive_code=row.receive_code or "",
-                    title=row.title,
-                    file_count=row.file_count,
-                    folder_count=row.folder_count,
-                    total_size=row.total_size,
-                    status=row.status,
-                    last_crawled_at=row.last_crawled_at,
-                    created_at=row.created_at,
-                ).model_dump(mode="json")
-                for row in share_rows
-            ]
+            items = []
+            for row in share_rows:
+                try:
+                    items.append(
+                        ShareInfo(
+                            id=row.id,
+                            share_code=row.share_code or "",
+                            receive_code=row.receive_code or "",
+                            title=row.title or "",
+                            file_count=row.file_count or 0,
+                            folder_count=row.folder_count or 0,
+                            total_size=row.total_size or 0,
+                            status=row.status if row.status is not None else 0,
+                            last_crawled_at=row.last_crawled_at,
+                            created_at=row.created_at,
+                        ).model_dump(mode="json")
+                    )
+                except Exception as row_exc:
+                    logger.warning(f"[WS-Manager] Error serializing share row {getattr(row, 'id', None)}: {row_exc}")
 
             total_pages = (filtered_total + page_size - 1) // page_size if page_size > 0 else 1
 
@@ -225,7 +246,6 @@ class TaskWebSocketManager:
             }
 
         # 针对每个客户端的特定过滤条件生成数据并推送
-        dead_connections = set()
         for ws in list(self.active_connections):
             sub = self.subscriptions.get(ws, {})
             p = sub.get("page", 1)
@@ -240,15 +260,13 @@ class TaskWebSocketManager:
                 # 覆盖最新全局 stats
                 snapshot["stats"] = stats_payload
 
-                await ws.send_json({
+                await self.safe_send_json(ws, {
                     "type": "shares_data",
                     "data": snapshot,
                 })
-            except Exception:
-                dead_connections.add(ws)
-
-        for dead_ws in dead_connections:
-            self.disconnect(dead_ws)
+            except Exception as broadcast_err:
+                logger.warning(f"[WS-Manager] Error preparing update for client: {broadcast_err}")
+                self.disconnect(ws)
 
     async def notify_task_event(self, event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
         """
