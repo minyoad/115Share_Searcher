@@ -40,10 +40,10 @@ class Settings(BaseSettings):
     CRAWLER_SNAP_URL: str = "https://webapi.115.com/share/snap"
     CRAWLER_DEFAULT_METHOD: str = "GET"  # 115 web client uses GET for /share/snap (with automatic fallback to POST)
     CRAWLER_PAGE_SIZE: int = 100   # 115 Snap API standard safe batch size (100 or 115)
-    CRAWLER_CONCURRENCY: int = 12  # Parallel directory worker tasks per share (boosted for multi-proxy traversal)
+    CRAWLER_CONCURRENCY: int = 16  # Parallel directory worker tasks per share (boosted for multi-proxy traversal)
     CRAWLER_BATCH_UPSERT_SIZE: int = 1000  # Pipeline DB batch write size
-    CRAWLER_RATE_MIN: float = 0.05  # Minimum delay between requests across workers (seconds)
-    CRAWLER_RATE_MAX: float = 0.15  # Maximum delay between requests (seconds)
+    CRAWLER_RATE_MIN: float = 0.15  # Minimum delay between requests per proxy node (seconds)
+    CRAWLER_RATE_MAX: float = 0.35  # Maximum delay between requests per proxy node (seconds)
     CRAWLER_BACKOFF_ON_405: float = 3.0  # Cooldown seconds when 115 WAF returns 405
     CRAWLER_MAX_RETRIES: int = 5
     CRAWLER_TIMEOUT: float = 25.0
@@ -77,8 +77,8 @@ class Settings(BaseSettings):
         description="Comma or newline separated list of proxy URLs (for CUSTOM_LIST mode)"
     )
     PROXY_ROTATION_STRATEGY: str = Field(
-        default="rotate_on_error", 
-        description="Rotation strategy: 'rotate_on_error', 'rotate_per_request', 'round_robin'"
+        default="least_busy", 
+        description="Rotation strategy: 'least_busy' (optimal for multi-proxy), 'rotate_per_request', 'round_robin', 'rotate_on_error'"
     )
     PROXY_POOL_REFRESH_INTERVAL: int = Field(
         default=600, 

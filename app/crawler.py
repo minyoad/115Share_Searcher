@@ -1,7 +1,9 @@
 import asyncio
+import collections
 import logging
 import posixpath
 import random
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -32,45 +34,89 @@ class ShareBannedError(ShareCrawlerError):
     pass
 
 
-class GlobalPacer:
+class MultiProxyAdaptivePacer:
     """
-    协程安全全局请求速率与 WAF 熔断同步器
-    1. 确保多个并行协程在请求 115 API 时，单次请求之间保持严格的最小间隔 (0.4s - 0.85s)，
-       彻底消除同一毫秒内的突发并发 (Burst QPS) 触发 115 WAF 405 拦截。
-    2. 当任一 worker 遭遇 405 时，触发全局冷却 (3.0s~5.0s)，让所有 worker 暂停发起新请求，
-       使 115 服务端 WAF 频率计数器平稳清零。
+    协程安全·独立节点 IP 速率控制器与 WAF 隔离调度器 (单 VPS 多代理高并发核心)
+    1. 彻底打破旧版单一大全局锁瓶颈：为每个代理节点 IP 分配专属锁与时间戳。
+       - 代理 A 与 代理 B 之间的请求完全物理并行，绝无跨 IP 锁竞争阻塞！
+       - 当配置了 N 个代理节点时，并发总 QPS 提升至接近 N * (单IP安全QPS)，在单台 VPS 上即可榨干出口带宽。
+    2. 单 IP 频率合规防护：
+       - 对同一个 IP 节点，仍严格维持 min_delay ~ max_delay (如 0.15s ~ 0.35s) 的安全间隔，保护该 IP 不触发 115 单 IP 频控。
+       - 在 DIRECT (直连) 模式下，单一 IP 维持平滑严格防护。
+    3. 精准 IP 级 405 WAF 熔断隔离：
+       - 遭遇 405 拦截时，仅对其自身 IP 实施冷却隔离，其他健康代理毫秒级无缝继续抓取，绝不中断全局任务！
+    4. 实时 QPS 统计：维护滑动窗口，实时测算全局爬取速率。
     """
-    def __init__(self, min_delay: float = 0.40, max_delay: float = 0.85):
+    def __init__(self, min_delay: float = 0.15, max_delay: float = 0.35):
         self.min_delay = min_delay
         self.max_delay = max_delay
-        self._lock = asyncio.Lock()
-        self._last_call_time = 0.0
-        self._cooldown_until = 0.0
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._last_call_time: Dict[str, float] = {}
+        self._cooldown_until: Dict[str, float] = {}
+        self._global_lock = asyncio.Lock()
+        self._recent_requests: collections.deque = collections.deque()
 
-    async def acquire(self):
-        async with self._lock:
+    def _get_key(self, proxy_url: Optional[str]) -> str:
+        return proxy_url if proxy_url else "__DIRECT__"
+
+    async def _get_lock(self, key: str) -> asyncio.Lock:
+        async with self._global_lock:
+            if key not in self._locks:
+                self._locks[key] = asyncio.Lock()
+            return self._locks[key]
+
+    async def acquire(self, proxy_url: Optional[str] = None):
+        """对特定代理 IP 执行频控等待，其他不同代理的协程可同时并发执行"""
+        key = self._get_key(proxy_url)
+        node_lock = await self._get_lock(key)
+        async with node_lock:
             loop = asyncio.get_running_loop()
             now = loop.time()
 
-            # 若处于 405 WAF 熔断冷却期，等待冷却窗口结束
-            if now < self._cooldown_until:
-                wait_sec = self._cooldown_until - now
-                logger.info(f"[WAF Pacer] Pausing for {wait_sec:.2f}s to clear 115 WAF 405 cooldown window...")
+            # 若该具体代理正处于 405 冷却隔离期，等待冷却窗口结束
+            cooldown = self._cooldown_until.get(key, 0.0)
+            if now < cooldown:
+                wait_sec = cooldown - now
+                logger.info(f"[MultiProxy-Pacer] Proxy {key} in cooldown, waiting {wait_sec:.2f}s...")
                 await asyncio.sleep(wait_sec)
                 now = loop.time()
 
-            elapsed = now - self._last_call_time
+            last_time = self._last_call_time.get(key, 0.0)
+            elapsed = now - last_time
             target_delay = random.uniform(self.min_delay, self.max_delay)
             if elapsed < target_delay:
                 await asyncio.sleep(target_delay - elapsed)
 
-            self._last_call_time = loop.time()
+            current_time = loop.time()
+            self._last_call_time[key] = current_time
+            self._record_request(current_time)
 
-    async def trigger_cooldown(self, seconds: float = 3.0):
-        """触发全局 WAF 405 冷却阻断"""
-        async with self._lock:
-            loop = asyncio.get_running_loop()
-            self._cooldown_until = max(self._cooldown_until, loop.time() + seconds)
+    def _record_request(self, timestamp: float):
+        self._recent_requests.append(timestamp)
+        cutoff = timestamp - 5.0
+        while self._recent_requests and self._recent_requests[0] < cutoff:
+            self._recent_requests.popleft()
+
+    def get_current_qps(self) -> float:
+        """获取最近5秒内的全局实时平均 QPS"""
+        now = time.time()
+        cutoff = now - 5.0
+        while self._recent_requests and self._recent_requests[0] < cutoff:
+            self._recent_requests.popleft()
+        if not self._recent_requests:
+            return 0.0
+        duration = max(1.0, min(5.0, now - self._recent_requests[0]))
+        return round(len(self._recent_requests) / duration, 2)
+
+    async def trigger_cooldown(self, proxy_url: Optional[str] = None, seconds: float = 3.0):
+        """仅对触发 405 的具体代理 IP 施加冷却，不影响其他健康代理"""
+        key = self._get_key(proxy_url)
+        loop = asyncio.get_running_loop()
+        self._cooldown_until[key] = max(self._cooldown_until.get(key, 0.0), loop.time() + seconds)
+
+
+# 兼容旧引用别名
+GlobalPacer = MultiProxyAdaptivePacer
 
 
 class HttpClientPool:
@@ -226,12 +272,17 @@ class Crawler115Engine:
 
         while retries <= settings.CRAWLER_MAX_RETRIES:
             current_proxy = None
+            slot_acquired = False
             try:
-                # 严格通过全局调度器，杜绝突发并发冲击
-                await pacer.acquire()
-
-                # 从代理管理器分配或轮换代理
+                # 1. 从代理管理器根据策略 (如 least_busy / round_robin / rotate_per_request) 获取可用节点
                 current_proxy = await proxy_mgr.get_proxy(force_rotate=force_rotate)
+                # 2. 标记进入在途请求活跃状态
+                await proxy_mgr.acquire_slot(current_proxy)
+                slot_acquired = True
+
+                # 3. 严格针对该独立节点 IP 执行速率平滑（不阻塞其他代理的物理并行）
+                await pacer.acquire(current_proxy)
+
                 client = await http_pool.get_client(current_proxy)
                 force_rotate = False
 
@@ -265,6 +316,8 @@ class Crawler115Engine:
                         f"for share_code={share_code}, cid={cid}. Attempt {retries + 1}/{settings.CRAWLER_MAX_RETRIES}"
                     )
                     if current_proxy:
+                        # 仅冷却隔离此特定代理 IP，其他健康节点继续满速并行
+                        await pacer.trigger_cooldown(current_proxy, seconds=settings.PROXY_BAN_DURATION_405)
                         await proxy_mgr.mark_failure(current_proxy, is_405=True, reason="WAF 405 Blocked")
                         force_rotate = True
 
@@ -272,13 +325,14 @@ class Crawler115Engine:
                     current_method = "POST" if current_method == "GET" else "GET"
 
                     if proxy_mgr.mode == "OFF":
-                        await pacer.trigger_cooldown(backoff)
+                        await pacer.trigger_cooldown(None, backoff)
                         retries += 1
                         await asyncio.sleep(backoff)
                         backoff = min(backoff * 1.6, 10.0)
                     else:
                         retries += 1
-                        await asyncio.sleep(0.3)
+                        # 多代理模式下，该 IP 已经被隔离，立即切换下一个健康代理重试，无需长停顿
+                        await asyncio.sleep(0.05)
                     continue
 
                 if response.status_code != 200:
@@ -291,7 +345,7 @@ class Crawler115Engine:
                         force_rotate = True
 
                     retries += 1
-                    await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.5)
+                    await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.2)
                     backoff = min(backoff * 1.5, 8.0)
                     continue
 
@@ -313,7 +367,7 @@ class Crawler115Engine:
                         raise ShareBannedError(f"Share banned or blocked: {msg or 'Banned share'}")
 
                     retries += 1
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.3)
                     backoff = min(backoff * 1.5, 8.0)
                     continue
 
@@ -345,8 +399,12 @@ class Crawler115Engine:
                     force_rotate = True
 
                 retries += 1
-                await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.3)
+                await asyncio.sleep(backoff if proxy_mgr.mode == "OFF" else 0.1)
                 backoff = min(backoff * 1.5, 8.0)
+
+            finally:
+                if slot_acquired and current_proxy:
+                    await proxy_mgr.release_slot(current_proxy)
 
         raise ShareCrawlerError(
             f"Failed to fetch snap for share_code={share_code}, cid={cid} after {retries} retries"
@@ -405,7 +463,7 @@ class Crawler115Engine:
         await proxy_mgr.initialize()
 
         http_limits = httpx.Limits(
-            max_keepalive_connections=50, max_connections=100, keepalive_expiry=30.0
+            max_keepalive_connections=100, max_connections=200, keepalive_expiry=60.0
         )
         http_pool = HttpClientPool(limits=http_limits, timeout=self.timeout)
 
@@ -532,6 +590,77 @@ class Crawler115Engine:
                             stats["folders"] += local_folders
                             stats["bytes"] += local_bytes
 
+                        # 针对单 VPS 多代理做优化：如果该大目录包含多页，且配置了代理池，通过代理池并发拉取后续所有分页
+                        if total_in_dir > len(item_list) and proxy_mgr.mode != "OFF" and not stop_event.is_set():
+                            remaining_offsets = list(range(len(item_list), total_in_dir, page_size))
+                            
+                            async def fetch_one_page(rem_off: int):
+                                return await self._fetch_snap_page(
+                                    http_pool=http_pool,
+                                    proxy_mgr=proxy_mgr,
+                                    pacer=pacer,
+                                    share_code=share_code,
+                                    receive_code=effective_pwd,
+                                    cid=current_cid,
+                                    offset=rem_off,
+                                    limit=page_size,
+                                )
+
+                            # 分组并行抓取（每组最多12页），避免瞬间产生过多任务
+                            chunk_size = 12
+                            for chunk_start in range(0, len(remaining_offsets), chunk_size):
+                                if stop_event.is_set():
+                                    break
+                                chunk = remaining_offsets[chunk_start:chunk_start + chunk_size]
+                                chunk_results = await asyncio.gather(
+                                    *(fetch_one_page(off) for off in chunk),
+                                    return_exceptions=True
+                                )
+                                for res in chunk_results:
+                                    if isinstance(res, Exception):
+                                        logger.warning(f"Error parallel fetching page for cid={current_cid}: {res}")
+                                        continue
+                                    p_payload = res.get("data", {})
+                                    p_list = p_payload.get("list", [])
+                                    p_files = 0
+                                    p_folders = 0
+                                    p_bytes = 0
+                                    for p_item in p_list:
+                                        p_raw_fid = p_item.get("fid")
+                                        p_raw_cid = p_item.get("cid")
+                                        p_name = str(p_item.get("n", "")).strip()
+                                        if not p_name:
+                                            continue
+                                        p_is_dir = p_raw_fid is None or (p_raw_cid is not None and not p_raw_fid)
+                                        p_node_id = str(p_raw_cid if p_is_dir else p_raw_fid)
+                                        p_size = int(p_item.get("s", 0) or 0)
+                                        p_sha1 = str(p_item.get("sha1", "") or "").lower()
+                                        p_norm_path = posixpath.normpath(posixpath.join(current_virtual_path, p_name))
+                                        if p_is_dir:
+                                            p_folders += 1
+                                            await dir_queue.put((p_node_id, p_norm_path))
+                                        else:
+                                            _, p_ext = posixpath.splitext(p_name)
+                                            p_files += 1
+                                            p_bytes += p_size
+                                        await db_write_queue.put({
+                                            "share_id": share_obj.id,
+                                            "file_115_id": p_node_id,
+                                            "parent_115_id": current_cid,
+                                            "name": p_name,
+                                            "extension": p_ext.lstrip(".").lower() if not p_is_dir else "",
+                                            "size": p_size,
+                                            "is_dir": p_is_dir,
+                                            "sha1": p_sha1,
+                                            "full_path": p_norm_path,
+                                        })
+                                    async with stats_lock:
+                                        stats["files"] += p_files
+                                        stats["folders"] += p_folders
+                                        stats["bytes"] += p_bytes
+                            # 剩余所有分页已经并行抓取完毕，退出当前目录的循环
+                            break
+
                         offset += len(item_list)
                         if offset >= total_in_dir or not item_list:
                             break
@@ -544,7 +673,18 @@ class Crawler115Engine:
                 finally:
                     dir_queue.task_done()
 
-        concurrency = max(1, settings.CRAWLER_CONCURRENCY)
+        # 针对单 VPS 多代理动态自适应并发：结合健康代理节点数量，单代理支持 2 个活跃工作协程
+        available_proxies = proxy_mgr.get_available_count()
+        if proxy_mgr.mode == "OFF":
+            concurrency = min(settings.CRAWLER_CONCURRENCY, 4)
+        else:
+            concurrency = max(settings.CRAWLER_CONCURRENCY, min(max(available_proxies * 2, 8), 36))
+
+        logger.info(
+            f"[Crawler] Spawning {concurrency} parallel directory workers "
+            f"(mode={proxy_mgr.mode}, available_proxies={available_proxies}, strategy={settings.PROXY_ROTATION_STRATEGY})"
+        )
+
         workers = [
             asyncio.create_task(dir_worker(i))
             for i in range(concurrency)

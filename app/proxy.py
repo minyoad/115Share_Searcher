@@ -31,6 +31,8 @@ class ProxyNode:
     banned_until: float = 0.0
     last_used_at: float = 0.0
     last_latency_ms: float = 0.0
+    active_inflight: int = 0
+    last_request_time: float = 0.0
     error_reasons: List[str] = field(default_factory=list)
 
     @property
@@ -79,6 +81,7 @@ class ProxyNode:
             "is_banned_405": self.is_banned_405,
             "banned_remaining_sec": max(0, int(self.banned_until - time.time())) if self.is_banned_405 else 0,
             "last_latency_ms": round(self.last_latency_ms, 1),
+            "active_inflight": self.active_inflight,
             "recent_errors": self.error_reasons[-3:],
         }
 
@@ -631,7 +634,16 @@ class ProxyManager:
 
             strategy = settings.PROXY_ROTATION_STRATEGY
 
-            if strategy == "rotate_per_request" or force_rotate:
+            if strategy == "least_busy":
+                # 针对单 VPS 多代理高并发极致优化的最少在途请求调度算法 (Least-Inflight & Oldest-Used)
+                available_nodes.sort(key=lambda n: (n.active_inflight, n.last_used_at))
+                chosen = available_nodes[0]
+                chosen.last_used_at = time.time()
+                self._current_sticky_proxy = chosen.url
+                asyncio.create_task(self.sync_runtime_state_to_db())
+                return chosen.url
+
+            elif strategy == "rotate_per_request" or force_rotate:
                 chosen = random.choice(available_nodes)
                 chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
@@ -659,6 +671,29 @@ class ProxyManager:
                 self._current_sticky_proxy = chosen.url
                 asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
+
+    def get_available_count(self) -> int:
+        """获取当前池中未被405封禁且健康可用的节点数量"""
+        if self.mode == "OFF":
+            return 1
+        return sum(1 for p in self.pool.values() if p.is_available)
+
+    async def acquire_slot(self, proxy_url: Optional[str]):
+        """标记代理节点开始处理在途网络请求"""
+        if not proxy_url:
+            return
+        async with self.lock:
+            if proxy_url in self.pool:
+                self.pool[proxy_url].active_inflight += 1
+
+    async def release_slot(self, proxy_url: Optional[str]):
+        """标记代理节点完成请求，释放槽位"""
+        if not proxy_url:
+            return
+        async with self.lock:
+            if proxy_url in self.pool:
+                node = self.pool[proxy_url]
+                node.active_inflight = max(0, node.active_inflight - 1)
 
     async def mark_success(self, proxy_url: Optional[str], latency_ms: float = 0.0):
         if not proxy_url:
@@ -752,6 +787,7 @@ class ProxyManager:
 
         total_success = sum(p.success_count for p in self.pool.values())
         total_failures = sum(p.failure_count for p in self.pool.values())
+        active_inflight_total = sum(p.active_inflight for p in self.pool.values())
 
         # 按最近使用时间倒序排列，优先把近期活跃/接管的节点排在前面
         sorted_nodes = sorted(self.pool.values(), key=lambda n: n.last_used_at, reverse=True)
@@ -769,6 +805,7 @@ class ProxyManager:
             "failed_count": failed,
             "total_success_requests": total_success,
             "total_failed_requests": total_failures,
+            "active_inflight_total": active_inflight_total,
             "current_sticky_proxy": self._current_sticky_proxy if self.mode != "OFF" else None,
             "last_refresh_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_refresh_time)) if self.last_refresh_time else None,
             "refresh_interval_sec": settings.PROXY_POOL_REFRESH_INTERVAL,

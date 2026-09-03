@@ -45,6 +45,7 @@ export interface ProxyNodeInfo {
   is_banned_405: boolean;
   banned_remaining_sec: number;
   last_latency_ms: number;
+  active_inflight?: number;
   recent_errors: string[];
 }
 
@@ -62,6 +63,10 @@ export interface ProxySystemStatus {
   refresh_interval_sec: number;
   api_endpoint: string | null;
   sample_nodes: ProxyNodeInfo[];
+  active_inflight_total?: number;
+  crawler_concurrency?: number;
+  crawler_rate_min?: number;
+  crawler_rate_max?: number;
 }
 
 export type ActiveTab = 'search' | 'tasks' | 'code' | 'crawler' | 'proxy' | 'import' | 'tree' | 'api';

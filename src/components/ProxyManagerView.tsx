@@ -22,13 +22,14 @@ import { ProxySystemStatus, ProxyNodeInfo } from '../types';
 export const ProxyManagerView: React.FC = () => {
   const [status, setStatus] = useState<ProxySystemStatus>({
     mode: 'POOL_API',
-    rotation_strategy: 'rotate_on_error',
+    rotation_strategy: 'least_busy',
     total_proxies: 8,
     available_proxies: 7,
     banned_405_count: 1,
     failed_count: 0,
     total_success_requests: 1420,
     total_failed_requests: 12,
+    active_inflight_total: 0,
     current_sticky_proxy: 'http://118.24.120.45:8080',
     last_refresh_time: '2026-09-02 08:24:10',
     refresh_interval_sec: 45,
@@ -44,6 +45,7 @@ export const ProxyManagerView: React.FC = () => {
         is_banned_405: false,
         banned_remaining_sec: 0,
         last_latency_ms: 142.5,
+        active_inflight: 1,
         recent_errors: []
       },
       {
@@ -56,6 +58,7 @@ export const ProxyManagerView: React.FC = () => {
         is_banned_405: false,
         banned_remaining_sec: 0,
         last_latency_ms: 198.2,
+        active_inflight: 0,
         recent_errors: []
       },
       {
@@ -68,6 +71,7 @@ export const ProxyManagerView: React.FC = () => {
         is_banned_405: false,
         banned_remaining_sec: 0,
         last_latency_ms: 88.6,
+        active_inflight: 2,
         recent_errors: []
       },
       {
@@ -80,6 +84,7 @@ export const ProxyManagerView: React.FC = () => {
         is_banned_405: true,
         banned_remaining_sec: 42,
         last_latency_ms: 310.0,
+        active_inflight: 0,
         recent_errors: ['WAF 405 Blocked by 115']
       }
     ]
@@ -95,7 +100,7 @@ export const ProxyManagerView: React.FC = () => {
   const [formProxyUrl, setFormProxyUrl] = useState<string>('http://127.0.0.1:7890');
   const [formApiUrl, setFormApiUrl] = useState<string>('http://127.0.0.1:5010/get_all/');
   const [formCustomList, setFormCustomList] = useState<string>('http://118.24.120.45:8080\nsocks5://106.14.22.180:1080');
-  const [formStrategy, setFormStrategy] = useState<string>('rotate_on_error');
+  const [formStrategy, setFormStrategy] = useState<string>('least_busy');
   const [formInterval, setFormInterval] = useState<number>(45);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
 
@@ -289,7 +294,9 @@ export const ProxyManagerView: React.FC = () => {
           <div className="text-xs font-mono font-semibold text-slate-800 truncate" title={status.current_sticky_proxy || '直连'}>
             {status.current_sticky_proxy ? status.current_sticky_proxy.replace(/https?:\/\//, '') : '直连 (DIRECT)'}
           </div>
-          <div className="text-xs text-slate-400 mt-1">Sticky IP</div>
+          <div className="text-xs text-slate-400 mt-1">
+            在途并发: <span className="text-indigo-600 font-bold">{status.active_inflight_total ?? 0}</span> 槽位
+          </div>
         </div>
       </div>
 
@@ -385,6 +392,7 @@ export const ProxyManagerView: React.FC = () => {
                 <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500">
                   <th className="py-2.5 px-3 font-semibold rounded-l-lg">代理地址 / 协议</th>
                   <th className="py-2.5 px-3 font-semibold">健康状态</th>
+                  <th className="py-2.5 px-3 font-semibold">在途并发</th>
                   <th className="py-2.5 px-3 font-semibold">响应延迟</th>
                   <th className="py-2.5 px-3 font-semibold">成功/失败</th>
                   <th className="py-2.5 px-3 font-semibold text-right rounded-r-lg">操作</th>
@@ -421,6 +429,11 @@ export const ProxyManagerView: React.FC = () => {
                         )}
                       </td>
                       <td className="py-3 px-3 font-mono">
+                        <span className={(node.active_inflight || 0) > 0 ? 'inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 font-bold rounded' : 'text-slate-400'}>
+                          {node.active_inflight || 0}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 font-mono">
                         <span className={node.last_latency_ms < 150 ? 'text-emerald-600 font-semibold' : 'text-slate-600'}>
                           {node.last_latency_ms > 0 ? `${node.last_latency_ms} ms` : '-'}
                         </span>
@@ -447,7 +460,7 @@ export const ProxyManagerView: React.FC = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                    <td colSpan={6} className="py-8 text-center text-slate-400 text-xs">
                       当前未加载节点或为直连模式
                     </td>
                   </tr>
@@ -594,11 +607,12 @@ export const ProxyManagerView: React.FC = () => {
               <select
                 value={formStrategy}
                 onChange={(e) => setFormStrategy(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-medium"
               >
-                <option value="rotate_on_error">rotate_on_error (同一目录复用，遇错或 405 立即换新 IP)</option>
+                <option value="least_busy">least_busy (最少在途并发优先，单 VPS 多代理高吞吐推荐 ★)</option>
                 <option value="rotate_per_request">rotate_per_request (单次 Snap 请求单次换 IP，高离散)</option>
                 <option value="round_robin">round_robin (Round-Robin 顺序公平轮询)</option>
+                <option value="rotate_on_error">rotate_on_error (同一目录复用，遇错或 405 立即换新 IP)</option>
               </select>
             </div>
 
