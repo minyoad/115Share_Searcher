@@ -25,8 +25,13 @@
 ## 📁 目录结构
 
 ```text
-├── docker-compose.yml       # 一键编排容器 (postgres, redis, api, worker)
-├── Dockerfile               # 容器构建镜像定义
+├── .github
+│   └── workflows
+│       └── docker-build-push.yml # GitHub Actions 自动多架构编译与 GHCR 镜像发布
+├── docker-compose.yml       # 开发环境一键编排 (带热重载与本地构建)
+├── docker-compose.prod.yml  # 生产环境实际部署 (预编译镜像/多Worker/日志轮转/健康检查/内存调优)
+├── .env.prod.example        # 生产环境配置模板
+├── Dockerfile               # 容器构建镜像定义 (Python 3.11-slim + libpq)
 ├── requirements.txt         # Python 依赖清单
 ├── app
 │   ├── __init__.py          # 模块标识与版本信息
@@ -43,37 +48,57 @@
 
 ---
 
-## 🚀 快速启动
+## 🚀 部署方式
 
-### 方式 1：Docker Compose 一键部署 (推荐生产使用)
+### 方式 1：生产环境实际部署 (`docker-compose.prod.yml`)
+
+针对 VPS、独立服务器或私有云生产环境设计，预设日志大小轮转限制、PostgreSQL 内存参数调优、多协程高并发 Worker 以及健康检查心跳：
 
 ```bash
-# 1. 启动所有服务 (PostgreSQL, Redis, FastAPI, Crawler Worker)
-docker-compose up -d --build
+# 1. 复制生产配置文件模板
+cp .env.prod.example .env
 
-# 2. 查看实时日志
-docker-compose logs -f api worker
+# 2. 编辑 .env 修改密码与配置 (尤其是 POSTGRES_PASSWORD 与 REDIS_PASSWORD)
+vim .env
 
-# 3. 访问应用
-# - 搜索前端界面: http://localhost:8000
-# - 交互式 Swagger API 文档: http://localhost:8000/docs
+# 3. 启动全套生产服务 (PostgreSQL, Redis, FastAPI, Crawler Worker)
+docker compose -f docker-compose.prod.yml up -d
+
+# 4. 查看运行状态与各容器健康度
+docker compose -f docker-compose.prod.yml ps
+
+# 5. 查看实时滚动日志 (带 20MB 日志轮转保护)
+docker compose -f docker-compose.prod.yml logs -f --tail=100
+
+# 6. 停止或重启服务
+docker compose -f docker-compose.prod.yml restart
+# docker compose -f docker-compose.prod.yml down
 ```
 
-### 方式 2：本地开发环境直接运行
+### 方式 2：GitHub Actions 自动编译与镜像发布 (CI/CD)
+
+项目已内置 `.github/workflows/docker-build-push.yml` 自动化流水线：
+- **触发条件**：
+  - 代码推送到 `main` / `master` 分支时自动触发构建。
+  - 发布版本标签（如 `git tag v1.0.0 && git push origin v1.0.0`）时，自动生成 `v1.0.0`、`1.0` 与 `latest` 标签。
+  - 支持在 GitHub 控制台手动一键触发（`workflow_dispatch`）。
+- **多架构构建 (Multi-Arch)**：
+  - 自动编译 `linux/amd64` (标准 x86 云服务器) 与 `linux/arm64` (如 Apple Silicon / 树莓派 / 阿里云 ARM 实例)。
+- **智能构建层缓存 (GHA Cache)**：
+  - 采用 GitHub Actions Cache 加速，二次编译 Python 依赖只需 30 秒。
+- **发布目标**：
+  - 默认免密发布至 GitHub 官方容器镜像库 `ghcr.io/<你的用户名>/<仓库名>:latest`，用户在 VPS 上无需安装 Python/编译环境即可 `docker pull` 直接运行。
+
+### 方式 3：本地开发测试环境运行
 
 ```bash
-# 1. 安装依赖
+# 启动本地开发容器 (带代码目录热重载与开发调试端口)
+docker compose up -d --build
+
+# 或本地纯 Python 虚拟环境直接运行:
 pip install -r requirements.txt
-
-# 2. 启动本地 Postgres 与 Redis
-# (确保本地 PostgreSQL 已开启 pg_trgm 扩展)
-
-# 3. 启动后台抓取 Worker
-python -m app.worker
-
-# 4. 另开终端启动 FastAPI Web 接口服务
+python -m app.worker &
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
 
 ---
 

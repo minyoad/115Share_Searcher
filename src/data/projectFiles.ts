@@ -87,6 +87,324 @@ volumes:
     driver: local`
   },
   {
+    name: 'docker-compose.prod.yml',
+    path: 'docker-compose.prod.yml',
+    language: 'yaml',
+    description: '生产环境实际部署编排 (多Worker/预编译镜像/日志轮转/健康检查/内存调优)',
+    content: `version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: 115_postgres_prod
+    restart: always
+    shm_size: 512m
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=200
+      -c checkpoint_completion_target=0.9
+    environment:
+      POSTGRES_USER: \${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: \${POSTGRES_DB:-db_115share}
+      TZ: Asia/Shanghai
+    ports:
+      - "\${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \\$\\$POSTGRES_USER -d \\$\\$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: 115_redis_prod
+    restart: always
+    command: >
+      redis-server 
+      --appendonly yes 
+      --requirepass \${REDIS_PASSWORD:-redis123} 
+      --maxmemory 512mb 
+      --maxmemory-policy noeviction
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "\${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+  api:
+    image: \${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:\${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 115_api_prod
+    restart: always
+    command: >
+      uvicorn app.main:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --workers \${API_WORKERS:-4} 
+      --proxy-headers 
+      --forwarded-allow-ips='*' 
+      --access-log
+    ports:
+      - "\${API_PORT:-8000}:8000"
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_URL=postgresql+asyncpg://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD:-postgres123}@postgres:5432/\${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:\${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CRAWLER_USER_AGENT=\${CRAWLER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
+      - CRAWLER_COOKIE=\${CRAWLER_COOKIE:-}
+      - CRAWLER_RATE_MIN=\${CRAWLER_RATE_MIN:-0.3}
+      - CRAWLER_RATE_MAX=\${CRAWLER_RATE_MAX:-0.8}
+      - PROXY_MODE=\${PROXY_MODE:-OFF}
+      - PROXY_URL=\${PROXY_URL:-}
+      - PROXY_POOL_API=\${PROXY_POOL_API:-}
+      - PROXY_POOL_LIST=\${PROXY_POOL_LIST:-}
+      - PROXY_ROTATION_STRATEGY=\${PROXY_ROTATION_STRATEGY:-rotate_on_error}
+      - PROXY_POOL_REFRESH_INTERVAL=\${PROXY_POOL_REFRESH_INTERVAL:-45}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+  worker:
+    image: \${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:\${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 115_worker_prod
+    restart: always
+    command: python -m app.worker
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_URL=postgresql+asyncpg://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD:-postgres123}@postgres:5432/\${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:\${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CRAWLER_USER_AGENT=\${CRAWLER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
+      - CRAWLER_COOKIE=\${CRAWLER_COOKIE:-}
+      - CRAWLER_RATE_MIN=\${CRAWLER_RATE_MIN:-0.3}
+      - CRAWLER_RATE_MAX=\${CRAWLER_RATE_MAX:-0.8}
+      - PROXY_MODE=\${PROXY_MODE:-OFF}
+      - PROXY_URL=\${PROXY_URL:-}
+      - PROXY_POOL_API=\${PROXY_POOL_API:-}
+      - PROXY_POOL_LIST=\${PROXY_POOL_LIST:-}
+      - PROXY_ROTATION_STRATEGY=\${PROXY_ROTATION_STRATEGY:-rotate_on_error}
+      - PROXY_POOL_REFRESH_INTERVAL=\${PROXY_POOL_REFRESH_INTERVAL:-45}
+      - CONCURRENCY=\${WORKER_CONCURRENCY:-4}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+volumes:
+  pgdata:
+    name: 115_pgdata_prod
+    driver: local
+  redisdata:
+    name: 115_redisdata_prod
+    driver: local
+
+networks:
+  115_network:
+    name: 115_service_net
+    driver: bridge`
+  },
+  {
+    name: 'docker-build-push.yml',
+    path: '.github/workflows/docker-build-push.yml',
+    language: 'yaml',
+    description: 'GitHub Actions 自动多架构 (amd64/arm64) 编译 Docker 镜像并推送至 GHCR',
+    content: `name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*.*.*'
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: '是否推送镜像到 GHCR (true / false)'
+        required: true
+        default: 'true'
+        type: boolean
+      custom_tag:
+        description: '自定义镜像标签 (可选，默认使用分支/Tag)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: \${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build & Push Multi-Arch Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (Multi-Architecture Emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: 'linux/amd64,linux/arm64'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image)
+        uses: docker/login-action@v3
+        with:
+          registry: \${{ env.REGISTRY }}
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata (Tags & Labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: \${{ env.REGISTRY }}/\${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+            \${{ inputs.custom_tag != '' && format('type=raw,value={0}', inputs.custom_tag) || '' }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: \${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
+          tags: \${{ steps.meta.outputs.tags }}
+          labels: \${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max`
+  },
+  {
+    name: '.env.prod.example',
+    path: '.env.prod.example',
+    language: 'plaintext',
+    description: '生产环境安全配置模板 (数据库密码、Redis、镜像标签与反封禁代理配置)',
+    content: `# 镜像与版本
+DOCKER_IMAGE=ghcr.io/your-username/115share-search
+IMAGE_TAG=latest
+
+# PostgreSQL 生产配置
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_strong_postgres_password_here
+POSTGRES_DB=db_115share
+POSTGRES_PORT=5432
+
+# Redis 生产配置
+REDIS_PASSWORD=your_strong_redis_password_here
+REDIS_PORT=6379
+
+# FastAPI Web 服务
+API_PORT=8000
+API_WORKERS=4
+
+# 后台 Worker
+WORKER_CONCURRENCY=4
+CRAWLER_COOKIE=
+CRAWLER_RATE_MIN=0.3
+CRAWLER_RATE_MAX=0.8
+
+# 代理池配置
+PROXY_MODE=OFF
+PROXY_URL=
+PROXY_POOL_API=
+PROXY_POOL_LIST=
+PROXY_ROTATION_STRATEGY=rotate_on_error
+PROXY_POOL_REFRESH_INTERVAL=45`
+  },
+  {
     name: 'Dockerfile',
     path: 'Dockerfile',
     language: 'dockerfile',

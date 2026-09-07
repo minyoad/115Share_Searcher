@@ -1,0 +1,207 @@
+version: "3.9"
+
+# ==============================================================================
+# 115 Cloud Drive Share Search Service (115 分享资源搜索服务)
+# 生产环境部署编排文件 (Production Docker Compose)
+# 
+# 启动方式:
+#   1. 复制 .env.prod.example 为 .env 并配置密钥
+#   2. 执行: docker compose -f docker-compose.prod.yml up -d
+#   3. 查看日志: docker compose -f docker-compose.prod.yml logs -f
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. PostgreSQL 15 (开启 pg_trgm 扩展，支持百万级文件名三元分词 GIN 倒排检索)
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: 115_postgres_prod
+    restart: always
+    shm_size: 512m
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=200
+      -c checkpoint_completion_target=0.9
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-db_115share}
+      TZ: Asia/Shanghai
+    ports:
+      # 如仅容器内访问，可注释以下端口映射以增强安全性
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+  # ----------------------------------------------------------------------------
+  # 2. Redis 7 (任务队列与抓取去重缓存)
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: 115_redis_prod
+    restart: always
+    command: >
+      redis-server 
+      --appendonly yes 
+      --requirepass ${REDIS_PASSWORD:-redis123} 
+      --maxmemory 512mb 
+      --maxmemory-policy noeviction
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      # 如仅容器内访问，可注释以下端口映射
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+  # ----------------------------------------------------------------------------
+  # 3. FastAPI Web REST API (支持多 Worker、生产级反向代理头、健康检查)
+  # ----------------------------------------------------------------------------
+  api:
+    image: ${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 115_api_prod
+    restart: always
+    command: >
+      uvicorn app.main:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --workers ${API_WORKERS:-4} 
+      --proxy-headers 
+      --forwarded-allow-ips='*' 
+      --access-log
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CRAWLER_USER_AGENT=${CRAWLER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
+      - CRAWLER_COOKIE=${CRAWLER_COOKIE:-}
+      - CRAWLER_RATE_MIN=${CRAWLER_RATE_MIN:-0.3}
+      - CRAWLER_RATE_MAX=${CRAWLER_RATE_MAX:-0.8}
+      - PROXY_MODE=${PROXY_MODE:-OFF}
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_POOL_API=${PROXY_POOL_API:-}
+      - PROXY_POOL_LIST=${PROXY_POOL_LIST:-}
+      - PROXY_ROTATION_STRATEGY=${PROXY_ROTATION_STRATEGY:-rotate_on_error}
+      - PROXY_POOL_REFRESH_INTERVAL=${PROXY_POOL_REFRESH_INTERVAL:-45}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+  # ----------------------------------------------------------------------------
+  # 4. Background Crawler Worker (异步队列消费，BFS 遍历与批量入库)
+  # ----------------------------------------------------------------------------
+  worker:
+    image: ${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 115_worker_prod
+    restart: always
+    command: python -m app.worker
+    environment:
+      - TZ=Asia/Shanghai
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CRAWLER_USER_AGENT=${CRAWLER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
+      - CRAWLER_COOKIE=${CRAWLER_COOKIE:-}
+      - CRAWLER_RATE_MIN=${CRAWLER_RATE_MIN:-0.3}
+      - CRAWLER_RATE_MAX=${CRAWLER_RATE_MAX:-0.8}
+      - PROXY_MODE=${PROXY_MODE:-OFF}
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_POOL_API=${PROXY_POOL_API:-}
+      - PROXY_POOL_LIST=${PROXY_POOL_LIST:-}
+      - PROXY_ROTATION_STRATEGY=${PROXY_ROTATION_STRATEGY:-rotate_on_error}
+      - PROXY_POOL_REFRESH_INTERVAL=${PROXY_POOL_REFRESH_INTERVAL:-45}
+      - CONCURRENCY=${WORKER_CONCURRENCY:-4}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - 115_network
+
+# ------------------------------------------------------------------------------
+# 存储卷与网络配置
+# ------------------------------------------------------------------------------
+volumes:
+  pgdata:
+    name: 115_pgdata_prod
+    driver: local
+  redisdata:
+    name: 115_redisdata_prod
+    driver: local
+
+networks:
+  115_network:
+    name: 115_service_net
+    driver: bridge

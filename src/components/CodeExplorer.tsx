@@ -10,7 +10,9 @@ import {
   Cpu, 
   Database,
   FileText,
-  Server
+  Server,
+  Workflow,
+  Rocket
 } from 'lucide-react';
 import { PROJECT_FILES } from '../data/projectFiles';
 import { ProjectFile } from '../types';
@@ -36,7 +38,8 @@ export const CodeExplorer: React.FC = () => {
         zip.file(file.path, file.content);
       });
 
-      // Add Docker environment template & init files
+      // Add Docker environment templates, dockerignore & init files
+      zip.file('.dockerignore', `__pycache__\n*.pyc\n*.pyo\n*.pyd\n.git\n.gitignore\n.env\nnode_modules\ndist\nbuild\n`);
       zip.file('.env.example', `POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres123
 POSTGRES_DB=db_115share
@@ -64,12 +67,20 @@ CRAWLER_COOKIE=
     }
   };
 
-  const getFileIcon = (fileName: string) => {
-    if (fileName.endsWith('.py')) return <FileCode className="w-4 h-4 text-emerald-500" />;
-    if (fileName.endsWith('.yml') || fileName.endsWith('.yaml')) return <Server className="w-4 h-4 text-amber-500" />;
-    if (fileName.endsWith('.html')) return <FileText className="w-4 h-4 text-orange-500" />;
-    if (fileName === 'Dockerfile') return <Cpu className="w-4 h-4 text-cyan-500" />;
-    if (fileName.includes('requirements') || fileName.includes('config')) return <Database className="w-4 h-4 text-purple-500" />;
+  const getFileIcon = (file: ProjectFile) => {
+    if (file.path.includes('.github') || file.name.includes('build-push')) {
+      return <Workflow className="w-4 h-4 text-purple-500" />;
+    }
+    if (file.name.includes('prod')) {
+      return <Rocket className="w-4 h-4 text-rose-500" />;
+    }
+    if (file.name.endsWith('.py')) return <FileCode className="w-4 h-4 text-emerald-500" />;
+    if (file.name.endsWith('.yml') || file.name.endsWith('.yaml')) return <Server className="w-4 h-4 text-amber-500" />;
+    if (file.name.endsWith('.html')) return <FileText className="w-4 h-4 text-orange-500" />;
+    if (file.name === 'Dockerfile') return <Cpu className="w-4 h-4 text-cyan-500" />;
+    if (file.name.includes('requirements') || file.name.includes('config') || file.name.includes('.env')) {
+      return <Database className="w-4 h-4 text-purple-500" />;
+    }
     return <FileCode className="w-4 h-4 text-blue-500" />;
   };
 
@@ -83,7 +94,7 @@ CRAWLER_COOKIE=
             完整项目工程源码 (Python 3.11 + FastAPI + PostgreSQL + Redis)
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            符合企业级规范的模块化分层代码结构，包含数据库连接池、异步爬虫引擎、GIN 倒排索引与容器编排
+            包含实际生产部署 Docker Compose、GitHub Actions 自动多架构编译流水线、异步爬虫引擎与 pg_trgm 倒排索引
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -94,7 +105,7 @@ CRAWLER_COOKIE=
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition disabled:opacity-50"
           >
             <Download className="w-4 h-4" />
-            {isZipping ? '打包中...' : '一键打包下载 (.zip)'}
+            {isZipping ? '打包中...' : '一键打包下载完整源码 (.zip)'}
           </button>
         </div>
       </div>
@@ -122,7 +133,7 @@ CRAWLER_COOKIE=
                   }`}
                 >
                   <div className="flex items-center gap-2.5 truncate">
-                    {getFileIcon(file.name)}
+                    {getFileIcon(file)}
                     <span className="truncate">{file.path}</span>
                   </div>
                   <span className="text-[10px] text-slate-400 font-sans shrink-0 ml-2">
@@ -133,14 +144,26 @@ CRAWLER_COOKIE=
             })}
           </div>
 
-          <div className="p-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
-            <div className="flex items-center gap-1.5 font-medium text-slate-700 mb-1">
-              <Terminal className="w-3.5 h-3.5 text-blue-600" />
-              本地启动命令：
+          <div className="p-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-600 space-y-2">
+            <div>
+              <div className="flex items-center gap-1.5 font-medium text-slate-700 mb-1">
+                <Rocket className="w-3.5 h-3.5 text-rose-600" />
+                生产实际部署命令：
+              </div>
+              <code className="block p-2 bg-slate-900 text-emerald-400 rounded text-[11px] font-mono select-all">
+                docker compose -f docker-compose.prod.yml up -d
+              </code>
             </div>
-            <code className="block p-2 bg-slate-900 text-emerald-400 rounded text-[11px] font-mono select-all">
-              docker-compose up -d --build
-            </code>
+
+            <div>
+              <div className="flex items-center gap-1.5 font-medium text-slate-700 mb-1">
+                <Terminal className="w-3.5 h-3.5 text-blue-600" />
+                本地开发启动：
+              </div>
+              <code className="block p-2 bg-slate-900 text-slate-300 rounded text-[11px] font-mono select-all">
+                docker compose up -d --build
+              </code>
+            </div>
           </div>
         </div>
 
@@ -177,3 +200,4 @@ CRAWLER_COOKIE=
     </div>
   );
 };
+
