@@ -33,6 +33,8 @@ export interface FileRecord {
   share_code: string;
   receive_code: string;
   share_title: string;
+  target_cid?: string;
+  cid_share_url?: string;
 }
 
 export interface ProxyNodeInfo {

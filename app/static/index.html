@@ -218,9 +218,16 @@
                   </h3>
                 </div>
 
-                <div class="text-xs text-slate-500 truncate flex items-center space-x-1" :title="item.full_path">
+                <div class="text-xs text-slate-500 truncate flex items-center space-x-1.5" :title="item.full_path">
                   <span>📂 路径:</span>
-                  <span class="font-mono text-slate-600">{{ item.full_path }}</span>
+                  <span class="font-mono text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/60">{{ item.full_path }}</span>
+                  <button
+                    @click="openTree(item.share_code, item.is_dir ? item.file_115_id : (item.parent_115_id || '0'), item.file_115_id)"
+                    class="text-[11px] text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5 ml-1"
+                    :title="'直达该目录 (CID: ' + (item.is_dir ? item.file_115_id : (item.parent_115_id || '0')) + ')'"
+                  >
+                    <span>直达目录 ➔</span>
+                  </button>
                 </div>
 
                 <div class="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-1">
@@ -235,16 +242,20 @@
               <div class="flex flex-col items-end gap-2 shrink-0">
                 <div class="flex items-center gap-1.5">
                   <button 
-                    @click="openTree(item.share_code, item.parent_115_id)"
+                    @click="openTree(item.share_code, item.is_dir ? item.file_115_id : (item.parent_115_id || '0'), item.file_115_id)"
                     class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg shadow-xs transition flex items-center gap-1"
-                    title="在层级目录树中打开并浏览该文件所在文件夹"
+                    :title="item.is_dir ? '进入该文件夹 (CID: ' + item.file_115_id + ')' : '直达所在目录 (CID: ' + (item.parent_115_id || '0') + ') 并高亮该文件'"
                   >
-                    🌳 所在目录
+                    🌳 <span>{{ item.is_dir ? '进入该目录' : '直达所在目录' }}</span>
+                    <span v-if="(item.is_dir ? item.file_115_id : item.parent_115_id) && (item.is_dir ? item.file_115_id : item.parent_115_id) !== '0'" class="text-[10px] font-mono px-1 py-0.2 bg-indigo-100/90 rounded text-indigo-800 font-bold">
+                      CID
+                    </span>
                   </button>
                   <a 
-                    :href="item.share_url" 
+                    :href="item.cid_share_url || item.share_url" 
                     target="_blank"
-                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition"
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition flex items-center gap-1"
+                    :title="(item.is_dir ? item.file_115_id : item.parent_115_id) && (item.is_dir ? item.file_115_id : item.parent_115_id) !== '0' ? '在 115 官方页面直达该目录 (#cid=' + (item.is_dir ? item.file_115_id : item.parent_115_id) + ')' : '打开 115 分享根目录'"
                   >
                     直达 115 ↗
                   </a>
@@ -773,11 +784,12 @@
               📋 复制路径
             </button>
             <a 
-              :href="treeData.share_url" 
+              :href="treeData.cid_share_url || treeData.share_url" 
               target="_blank"
-              class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition"
+              class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition flex items-center gap-1"
+              :title="treeCurrentCid && treeCurrentCid !== '0' ? '带当前 CID 直达 115 目录 (#cid=' + treeCurrentCid + ')' : '打开 115 分享根目录'"
             >
-              115 原网页 ↗
+              <span>{{ treeCurrentCid && treeCurrentCid !== '0' ? '115 带 CID 直达 ↗' : '115 原网页 ↗' }}</span>
             </a>
           </div>
         </div>
@@ -847,7 +859,8 @@
             v-else
             v-for="item in filteredTreeItems" 
             :key="item.id"
-            class="p-3.5 hover:bg-slate-50 transition flex items-center justify-between gap-3 group"
+            :class="treeHighlightId === item.file_115_id ? 'bg-amber-50/90 border-l-4 border-amber-500 shadow-2xs' : 'hover:bg-slate-50'"
+            class="p-3.5 transition flex items-center justify-between gap-3 group"
           >
             <!-- Left Node Info -->
             <div class="flex items-center gap-3 min-w-0 flex-1">
@@ -869,7 +882,7 @@
 
               <!-- Name & Path -->
               <div class="space-y-0.5 min-w-0 flex-1">
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
                   <h4 
                     v-if="item.is_dir"
                     @click="drillDown(item.file_115_id, item.name, item.full_path)"
@@ -885,6 +898,13 @@
                   >
                     {{ item.name }}
                   </h4>
+
+                  <span 
+                    v-if="treeHighlightId === item.file_115_id"
+                    class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-900 shrink-0"
+                  >
+                    🎯 搜索命中目标
+                  </span>
 
                   <span 
                     v-if="item.is_dir" 
@@ -1715,6 +1735,7 @@
         const treeShareCode = ref('');
         const treeManualCode = ref('');
         const treeCurrentCid = ref('0');
+        const treeHighlightId = ref('');
         const treeLoading = ref(false);
         const treeData = ref(null);
         const treeBreadcrumbs = ref([]);
@@ -1907,8 +1928,9 @@
           }
         };
 
-        const openTree = (shareCode, cid = '0') => {
+        const openTree = (shareCode, cid = '0', highlightId = null) => {
           activeTab.value = 'tree';
+          treeHighlightId.value = highlightId || '';
           loadTree(shareCode, cid || '0');
         };
 
@@ -2520,6 +2542,7 @@
           switchToProxy,
           loadTree,
           openTree,
+          treeHighlightId,
           onTreeShareSelectChange,
           drillDown,
           goBackToCrumb,

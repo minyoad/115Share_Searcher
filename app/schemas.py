@@ -231,6 +231,14 @@ class SearchResultItem(BaseModel):
     share_title: str
     share_status: int
     share_url: str
+    target_cid: str = Field(
+        default="0",
+        description="目标目录 115 CID（若条目自身为文件夹则为其自身的 CID，若为文件则为其所在父目录的 CID）"
+    )
+    cid_share_url: str = Field(
+        default="",
+        description="直接定位至该目录的 115 分享链接（含 #cid= 参数）"
+    )
     openlist_mount_cid: str = Field(
         description="用于 AList / OpenList / 115 开放接口挂载或定位的目录/文件 CID/FID"
     )
@@ -273,6 +281,8 @@ class DirectoryListResponse(BaseModel):
     receive_code: str = ""
     share_status: int = 1
     share_url: str = ""
+    root_share_url: str = ""
+    cid_share_url: str = ""
     parent_115_id: str
     parent_cid: str = "0"
     parent_path: str = "/"

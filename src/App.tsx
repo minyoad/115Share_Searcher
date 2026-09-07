@@ -44,6 +44,8 @@ export default function App() {
   const [shares, setShares] = useState<ShareRecord[]>(INITIAL_SHARES);
   const [files, setFiles] = useState<FileRecord[]>(INITIAL_FILES);
   const [treeShareCode, setTreeShareCode] = useState<string>('');
+  const [treeTargetCid, setTreeTargetCid] = useState<string>('0');
+  const [treeHighlightId, setTreeHighlightId] = useState<string>('');
   const [toastMsg, setToastMsg] = useState<string>('');
   const [mobileMoreOpen, setMobileMoreOpen] = useState<boolean>(false);
 
@@ -207,8 +209,10 @@ export default function App() {
     showToast(`✅ 成功导出 ${targetShares.length} 条分享记录为 JSON 格式！`);
   };
 
-  const handleOpenTree = (shareCode: string) => {
+  const handleOpenTree = (shareCode: string, targetCid: string = '0', highlightId: string = '') => {
     setTreeShareCode(shareCode);
+    setTreeTargetCid(targetCid || '0');
+    setTreeHighlightId(highlightId || '');
     setActiveTab('tree');
   };
 
@@ -465,6 +469,8 @@ export default function App() {
             shares={shares}
             files={files}
             initialShareCode={treeShareCode}
+            initialCid={treeTargetCid}
+            highlightId={treeHighlightId}
             onBackToSearch={() => setActiveTab('search')}
           />
         )}

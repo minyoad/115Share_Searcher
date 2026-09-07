@@ -730,7 +730,13 @@ async def search_resources(
     items = []
     for file_obj, share_obj in rows:
         pwd_suffix = f"?password={share_obj.receive_code}" if share_obj.receive_code else ""
-        share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}"
+        root_share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}"
+        
+        # 精确计算目标目录 CID：若为文件夹，则为其自身 CID；若为文件，则为其所在父目录 CID
+        target_cid = file_obj.file_115_id if file_obj.is_dir else (file_obj.parent_115_id or "0")
+        is_root = not target_cid or target_cid == "0"
+        cid_hash = f"#cid={target_cid}" if not is_root else ""
+        cid_share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}{cid_hash}"
 
         items.append(
             SearchResultItem(
@@ -749,7 +755,9 @@ async def search_resources(
                 receive_code=share_obj.receive_code,
                 share_title=share_obj.title or f"115 分享 ({share_obj.share_code})",
                 share_status=share_obj.status,
-                share_url=share_url,
+                share_url=cid_share_url,
+                target_cid=target_cid,
+                cid_share_url=cid_share_url,
                 openlist_mount_cid=file_obj.file_115_id,
             )
         )
@@ -869,14 +877,18 @@ async def list_share_directory(
         )
 
     pwd_suffix = f"?password={share_obj.receive_code}" if share_obj.receive_code else ""
-    share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}"
+    root_share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}"
+    cid_hash = f"#cid={parent_115_id}" if parent_115_id and parent_115_id != "0" else ""
+    cid_share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}{cid_hash}"
 
     return DirectoryListResponse(
         share_code=share_code,
         share_title=share_obj.title or f"115 分享 ({share_obj.share_code})",
         receive_code=share_obj.receive_code or "",
         share_status=share_obj.status,
-        share_url=share_url,
+        share_url=cid_share_url,
+        root_share_url=root_share_url,
+        cid_share_url=cid_share_url,
         parent_115_id=parent_115_id,
         parent_cid=parent_cid,
         parent_path=parent_path,
