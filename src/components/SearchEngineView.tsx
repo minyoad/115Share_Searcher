@@ -21,9 +21,12 @@ import {
   Clock,
   RotateCw,
   X,
-  TrendingUp
+  TrendingUp,
+  Puzzle,
+  HelpCircle
 } from 'lucide-react';
 import { FileRecord, ShareRecord } from '../types';
+import { CidHelperModal } from './CidHelperModal';
 
 interface HotSearchItem {
   id: string;
@@ -76,6 +79,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   const [sizeFilter, setSizeFilter] = useState<'all' | 'small' | 'medium' | 'large' | 'huge'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState<number | null>(null);
+  const [isCidHelperOpen, setIsCidHelperOpen] = useState(false);
 
   // Popular / Hot searches states
   const [selectedHotCat, setSelectedHotCat] = useState<'all' | 'movie' | 'tech' | 'music' | 'doc'>('all');
@@ -421,9 +425,37 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           <span>PostgreSQL 索引收录: <strong className="text-slate-800 font-semibold">{files.length}</strong> 节点</span>
           <span>· 当前匹配: <strong className="text-blue-600 font-bold">{searchResults.length}</strong> 条</span>
         </span>
-        <span className="text-[11px] text-slate-400 hidden sm:inline">
-          支持 pg_trgm GIN 三元倒排模糊索引与全路径路径下钻
-        </span>
+        <button
+          onClick={() => setIsCidHelperOpen(true)}
+          className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 hover:underline transition self-start sm:self-auto"
+        >
+          <Puzzle className="w-3.5 h-3.5" />
+          <span>115 官方链接直达助手 (油猴免密脚本)</span>
+        </button>
+      </div>
+
+      {/* CID Jump & Tampermonkey Notice Banner */}
+      <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 border border-blue-200/80 rounded-xl p-3 sm:p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs shadow-2xs">
+        <div className="flex items-start gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+            <Puzzle className="w-4 h-4" />
+          </div>
+          <div className="space-y-0.5 text-slate-700">
+            <p className="font-bold text-slate-900 flex items-center gap-1.5">
+              <span>为什么 115 官方链接会先要求输入密码且停留在根目录？</span>
+              <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">官方限制</span>
+            </p>
+            <p className="text-[11px] text-slate-600 leading-relaxed">
+              115 官方分享网页为 SPA 架构，源码强制默认只请求 <code className="bg-slate-200/80 px-1 rounded font-mono">cid=0</code> 且验密后刷新重置。推荐使用本站<strong>「直达所在目录」</strong>毫秒展开，或安装<strong>「115 油猴直达助手」</strong>实现官方网页自动免密+跳转目标目录！
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => setIsCidHelperOpen(true)}
+          className="self-start sm:self-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 text-xs active:scale-95"
+        >
+          <span>查看油猴脚本 / 解决方案</span>
+        </button>
       </div>
 
       {/* Results Cards List */}
@@ -500,16 +532,29 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
 
                   {/* Actions Row / Column */}
                   <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
-                    <a
-                      href={directCidUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex-1 sm:flex-none justify-center px-3.5 py-2 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition min-h-[38px] active:scale-95"
-                      title={!isRoot ? `在 115 官方页面直达该目录 (#cid=${targetCid})` : '打开 115 分享根目录'}
-                    >
-                      直达 115 提取
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
+                    <div className="flex flex-col items-center sm:items-end w-full sm:w-auto">
+                      <a
+                        href={directCidUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="w-full sm:w-auto justify-center px-3.5 py-2 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs flex items-center gap-1.5 transition min-h-[38px] active:scale-95"
+                        title={!isRoot ? `在 115 官方页面直达该目录 (#cid=${targetCid})` : '打开 115 分享根目录'}
+                      >
+                        直达 115 提取
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                      {!isRoot && (
+                        <button
+                          type="button"
+                          onClick={() => setIsCidHelperOpen(true)}
+                          className="text-[10px] text-slate-400 hover:text-blue-600 flex items-center gap-0.5 mt-1 transition"
+                          title="115 官方网页默认无视 CID 且验密后刷新根目录。点击了解如何使用油猴脚本自动免密直达！"
+                        >
+                          <HelpCircle className="w-3 h-3" />
+                          <span>官方跳根目录？</span>
+                        </button>
+                      )}
+                    </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       <button
@@ -578,6 +623,19 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* CID Jump & Tampermonkey Modal */}
+      <CidHelperModal
+        isOpen={isCidHelperOpen}
+        onClose={() => setIsCidHelperOpen(false)}
+        onNavigateToTree={() => {
+          if (searchResults.length > 0) {
+            const first = searchResults[0];
+            const cid = first.is_dir ? first.file_115_id : (first.parent_115_id || '0');
+            onOpenTree(first.share_code, cid, first.file_115_id);
+          }
+        }}
+      />
     </div>
   );
 };

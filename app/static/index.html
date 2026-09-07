@@ -197,8 +197,36 @@
 
       <!-- Results Stats & List -->
       <div v-if="results.length > 0">
-        <div class="flex items-center justify-between mb-4 px-1 text-sm text-slate-500">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-3 px-1 text-sm text-slate-500 gap-2">
           <span>共找到 <strong class="text-slate-800">{{ totalCount }}</strong> 条匹配文件 (第 {{ page }}/{{ totalPages }} 页)</span>
+          <button 
+            @click="showCidHelperModal = true"
+            class="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 hover:underline transition self-start sm:self-auto"
+          >
+            <span>🧩 115 官方直达助手 (油猴免密脚本)</span>
+          </button>
+        </div>
+
+        <!-- CID Jump & Tampermonkey Notice Banner -->
+        <div class="mb-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 border border-blue-200/80 rounded-xl p-3 sm:p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs shadow-2xs">
+          <div class="flex items-start gap-2.5">
+            <span class="text-base shrink-0">🧩</span>
+            <div class="space-y-0.5 text-slate-700">
+              <p class="font-bold text-slate-900 flex items-center gap-1.5">
+                <span>为什么 115 官方链接会先要求输入密码且停留在根目录？</span>
+                <span class="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">官方限制</span>
+              </p>
+              <p class="text-[11px] text-slate-600 leading-relaxed">
+                115 官方分享网页为 SPA 架构，源码强制默认只请求 <code class="bg-slate-200/80 px-1 rounded font-mono">cid=0</code> 且验密后刷新重置。推荐使用本站<strong>「直达所在目录」</strong>毫秒展开，或安装<strong>「115 油猴直达助手」</strong>实现官方网页自动免密+跳转目标目录！
+              </p>
+            </div>
+          </div>
+          <button
+            @click="showCidHelperModal = true"
+            class="self-start sm:self-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 text-xs active:scale-95"
+          >
+            <span>查看油猴脚本 / 解决方案</span>
+          </button>
         </div>
 
         <div class="space-y-3">
@@ -251,14 +279,24 @@
                       CID
                     </span>
                   </button>
-                  <a 
-                    :href="item.cid_share_url || item.share_url" 
-                    target="_blank"
-                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition flex items-center gap-1"
-                    :title="(item.is_dir ? item.file_115_id : item.parent_115_id) && (item.is_dir ? item.file_115_id : item.parent_115_id) !== '0' ? '在 115 官方页面直达该目录 (#cid=' + (item.is_dir ? item.file_115_id : item.parent_115_id) + ')' : '打开 115 分享根目录'"
-                  >
-                    直达 115 ↗
-                  </a>
+                  <div class="flex flex-col items-end gap-1">
+                    <a 
+                      :href="item.cid_share_url || item.share_url" 
+                      target="_blank"
+                      class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition flex items-center gap-1"
+                      :title="(item.is_dir ? item.file_115_id : item.parent_115_id) && (item.is_dir ? item.file_115_id : item.parent_115_id) !== '0' ? '在 115 官方页面直达该目录 (#cid=' + (item.is_dir ? item.file_115_id : item.parent_115_id) + ')' : '打开 115 分享根目录'"
+                    >
+                      直达 115 ↗
+                    </a>
+                    <button 
+                      type="button"
+                      @click="showCidHelperModal = true"
+                      class="text-[10px] text-slate-400 hover:text-blue-600 inline-flex items-center gap-0.5 mt-0.5 transition"
+                      title="115 官方网页默认无视 CID 且验密后刷新根目录。点击了解如何使用油猴脚本自动免密直达！"
+                    >
+                      <span>❓ 官方跳根目录？</span>
+                    </button>
+                  </div>
                 </div>
                 <button 
                   @click="copyText(item.openlist_mount_cid, 'AList/OpenList 挂载 CID 已复制')"
@@ -775,7 +813,14 @@
             </div>
           </div>
 
-          <div class="flex items-center gap-2 shrink-0">
+          <div class="flex items-center gap-2 shrink-0 flex-wrap">
+            <button 
+              @click="showCidHelperModal = true"
+              class="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded border border-amber-200 transition text-xs font-semibold flex items-center gap-1"
+              title="了解为什么 115 官方网页要求输密后停在根目录，以及如何使用油猴免密直达脚本"
+            >
+              🧩 <span>直达助手说明</span>
+            </button>
             <button 
               @click="copyText(treeData.parent_path, '当前全路径已复制')"
               class="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded border border-slate-200 transition"
@@ -1578,6 +1623,137 @@
       </div>
     </div>
 
+    <!-- CID Direct & Tampermonkey Helper Modal -->
+    <div 
+      v-if="showCidHelperModal" 
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto"
+    >
+      <div class="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden my-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+              🧩
+            </div>
+            <div>
+              <h3 class="text-base font-bold text-slate-900">
+                115 官方链接 CID 直达原理与解决方案
+              </h3>
+              <p class="text-xs text-slate-500">
+                解决“115 官方网页要求输密后停留在根目录、不跳转子目录”的问题
+              </p>
+            </div>
+          </div>
+          <button 
+            @click="showCidHelperModal = false" 
+            class="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Content -->
+        <div class="p-6 space-y-5 text-sm text-slate-600">
+          <!-- Why -->
+          <div class="p-3.5 bg-amber-50/80 rounded-xl border border-amber-200/80 flex items-start gap-3">
+            <span class="text-lg shrink-0">⚠️</span>
+            <div class="space-y-1 text-xs leading-relaxed text-amber-900">
+              <p class="font-bold">为什么 115 官方网页无法直接跳到指定 CID 目录？</p>
+              <p>
+                115 官方分享前端页面（<code class="font-mono bg-amber-100/80 px-1 py-0.5 rounded">115.com/s/*</code>）采用客户端单页架构，<strong>官方源码硬编码首次加载只请求根目录 (<code class="font-mono">cid=0</code>)</strong>，并没有监听 URL Hash 中的 <code class="font-mono">#cid=</code> 参数；且输入提取码验证后，官方页面会清空状态刷新根目录。这是 115 官方网站自身的设计限制。
+              </p>
+            </div>
+          </div>
+
+          <!-- Solution 1 -->
+          <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="inline-flex items-center gap-1.5 text-xs font-bold text-blue-700 uppercase tracking-wide">
+                📁 方案一：推荐直接使用本站内置目录树（无需安装任何插件）
+              </span>
+              <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[11px] font-semibold">
+                即开即用
+              </span>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              本搜索服务已将整个分享的目录结构完整建立索引！在搜索结果中点击<strong>「直达所在目录」</strong>，系统可<strong>毫秒级直接展开该文件所在的多级子目录</strong>，精准高亮目标文件，并支持复制绝对路径、快速切换上级目录或复制 AList / OpenList 挂载参数。
+            </p>
+            <button
+              @click="showCidHelperModal = false; activeTab = 'tree'"
+              class="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
+            >
+              🌳 立即打开目录树查看
+            </button>
+          </div>
+
+          <!-- Solution 2 -->
+          <div class="p-4 bg-indigo-50/60 rounded-xl border border-indigo-200/80 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-900 uppercase tracking-wide">
+                ✨ 方案二：安装「115 官方直达 & 自动免密」油猴脚本
+              </span>
+              <span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[11px] font-semibold">
+                终极官方直达
+              </span>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              如果您习惯直接在 115 官方网页端操作，只需在浏览器（Edge / Chrome / Firefox）中安装 <strong>Tampermonkey（油猴）</strong>、<strong>脚本猫</strong> 或 <strong>Violentmonkey</strong>，并安装本脚本：
+            </p>
+
+            <ul class="text-xs space-y-1.5 text-slate-700 bg-white p-3 rounded-lg border border-indigo-100">
+              <li class="flex items-center gap-2">
+                <span class="text-emerald-600 font-bold">✓</span>
+                <span><strong>自动免密提取</strong>：自动读取 URL 中的密码并模拟点击提取，无需手动输入提取码。</span>
+              </li>
+              <li class="flex items-center gap-2">
+                <span class="text-emerald-600 font-bold">✓</span>
+                <span><strong>自动请求劫持定位</strong>：在 115 页面初始化时将 <code class="font-mono bg-slate-100 px-1 py-0.2 rounded">cid=0</code> 替换为目标 CID，<strong>官方网页直接展示目标子文件夹</strong>！</span>
+              </li>
+            </ul>
+
+            <div class="flex items-center gap-2.5 pt-1">
+              <a 
+                href="/static/115-cid-helper.user.js" 
+                target="_blank"
+                class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
+              >
+                📥 一键安装油猴脚本 (.user.js)
+              </a>
+
+              <button 
+                @click="copyScriptCode"
+                class="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
+              >
+                📋 复制脚本源码
+              </button>
+
+              <button 
+                @click="showScriptCode = !showScriptCode"
+                class="text-xs text-indigo-600 hover:text-indigo-800 underline ml-auto"
+              >
+                {{ showScriptCode ? '隐藏源码' : '查看源码' }}
+              </button>
+            </div>
+
+            <!-- Code viewer -->
+            <div v-if="showScriptCode" class="mt-2 bg-slate-900 rounded-lg p-3 text-[11px] font-mono text-slate-300 max-h-48 overflow-y-auto border border-slate-800">
+              <pre>{{ userscriptCodeText }}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex items-center justify-end gap-3 px-6 py-3.5 border-t border-slate-100 bg-slate-50">
+          <button 
+            @click="showCidHelperModal = false"
+            class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast Notification -->
     <div 
       v-if="toastMessage" 
@@ -1740,6 +1916,73 @@
         const treeData = ref(null);
         const treeBreadcrumbs = ref([]);
         const treeFilterKeyword = ref('');
+
+        // CID Helper & Tampermonkey script state
+        const showCidHelperModal = ref(false);
+        const showScriptCode = ref(false);
+        const userscriptCodeText = ref(`// ==UserScript==
+// @name         115 分享链接 CID 直达 & 自动免密助手
+// @namespace    https://115.com/
+// @version      1.0.0
+// @description  自动解析 115 分享 URL 中的 password 并自动免密进入；自动将初始化请求 cid=0 替换为 URL 中的 #cid= 或 ?cid=，实现官方网页直达任意子目录！
+// @author       115 Search Service
+// @match        https://115.com/s/*
+// @match        https://115cdn.com/s/*
+// @match        https://anxia.com/s/*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    function getTargetCid() {
+        const hashMatch = window.location.hash.match(/cid=([0-9]+)/);
+        if (hashMatch) return hashMatch[1];
+        const searchMatch = window.location.search.match(/[?&]cid=([0-9]+)/);
+        if (searchMatch) return searchMatch[1];
+        return null;
+    }
+    const targetCid = getTargetCid();
+    if (targetCid && targetCid !== '0') {
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            if (typeof url === 'string' && url.includes('/share/snap') && (url.includes('cid=0') || !url.includes('cid='))) {
+                url = url.replace(/([?&])cid=0/, '$1cid=' + targetCid);
+            }
+            return origOpen.call(this, method, url, ...rest);
+        };
+        const origFetch = window.fetch;
+        window.fetch = function(input, init) {
+            if (typeof input === 'string' && input.includes('/share/snap') && (input.includes('cid=0') || !input.includes('cid='))) {
+                input = input.replace(/([?&])cid=0/, '$1cid=' + targetCid);
+            }
+            return origFetch.call(this, input, init);
+        };
+    }
+    // Auto password entry & submit
+    window.addEventListener('DOMContentLoaded', () => {
+        const params = new URLSearchParams(window.location.search);
+        const pwd = params.get('password') || params.get('pwd');
+        if (!pwd) return;
+        let attempts = 0;
+        const timer = setInterval(() => {
+            attempts++;
+            const input = document.querySelector('input[placeholder*="提取码"], input[type="password"], input.pwd-input');
+            if (input) {
+                input.value = pwd;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                const btn = document.querySelector('button.btn-submit, a.btn-submit, .submit-btn, button[type="submit"]');
+                if (btn) btn.click();
+                clearInterval(timer);
+            }
+            if (attempts > 30) clearInterval(timer);
+        }, 200);
+    });
+})();`);
+
+        const copyScriptCode = () => {
+          copyText(userscriptCodeText.value, '油猴脚本源码已复制到剪贴板！');
+        };
 
         // Proxy management reactive state
         const proxyStatus = ref(null);
@@ -2575,6 +2818,10 @@
           clearSelection,
           batchReCrawlSelected,
           exportConfig,
+          showCidHelperModal,
+          showScriptCode,
+          userscriptCodeText,
+          copyScriptCode,
           isAdmin,
           showAdminModal,
           adminTokenInput,
