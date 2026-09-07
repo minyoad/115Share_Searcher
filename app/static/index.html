@@ -109,6 +109,31 @@
             </button>
           </div>
 
+          <!-- Popular / Hot Searches (热门搜索快速填入) -->
+          <div class="pt-2 border-t border-slate-100 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-slate-700 flex items-center gap-1">
+                <span class="text-orange-500">🔥</span> 热门搜索:
+                <span class="text-[11px] font-normal text-slate-400">点击标签快速填入并检索</span>
+              </span>
+            </div>
+            <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-nowrap scrollbar-none">
+              <button 
+                v-for="item in hotSearches" 
+                :key="item.keyword"
+                type="button"
+                @click="selectHotSearch(item.keyword)"
+                :class="query.keyword.toLowerCase() === item.keyword.toLowerCase() ? 'bg-orange-50 border-orange-400 text-orange-800 font-bold ring-1 ring-orange-300' : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'"
+                class="px-2.5 py-1 rounded-lg border text-xs transition flex items-center gap-1.5 shrink-0"
+              >
+                <span>{{ item.label }}</span>
+                <span :class="item.badgeClass" class="text-[9px] px-1 py-0.2 rounded font-bold uppercase">
+                  {{ item.badge }}
+                </span>
+              </button>
+            </div>
+          </div>
+
           <!-- Filter Pills -->
           <div class="flex flex-wrap items-center gap-2 pt-2 text-sm text-slate-600">
             <span class="text-xs font-semibold uppercase text-slate-400 mr-1">类型筛选:</span>
@@ -1401,6 +1426,22 @@
         const query = ref({ keyword: '', extension: '' });
         const quickExts = ['mkv', 'mp4', 'pdf', 'zip', 'iso', 'flac', 'epub'];
         
+        const hotSearches = ref([
+          { keyword: '星际穿越', label: '星际穿越 4K', badge: 'TOP 1', badgeClass: 'bg-rose-500 text-white' },
+          { keyword: '奥本海默', label: '奥本海默 IMAX', badge: 'HOT', badgeClass: 'bg-orange-500 text-white' },
+          { keyword: '沙丘2', label: '沙丘2 杜比', badge: 'HOT', badgeClass: 'bg-orange-500 text-white' },
+          { keyword: 'DDIA', label: 'DDIA 架构', badge: '必读', badgeClass: 'bg-blue-100 text-blue-700' },
+          { keyword: 'PostgreSQL', label: 'PostgreSQL 15', badge: '核心', badgeClass: 'bg-blue-100 text-blue-700' },
+          { keyword: '地球脉动', label: '地球脉动 III', badge: '4K HDR', badgeClass: 'bg-emerald-600 text-white' },
+          { keyword: 'Hans Zimmer', label: 'Hans Zimmer 原声', badge: '母带', badgeClass: 'bg-blue-100 text-blue-700' },
+          { keyword: 'Kubernetes', label: 'K8s 实战', badge: 'NEW', badgeClass: 'bg-emerald-600 text-white' },
+        ]);
+
+        const selectHotSearch = (kw) => {
+          query.value.keyword = kw;
+          doSearch(1);
+        };
+
         const loading = ref(false);
         const searched = ref(false);
         const results = ref([]);
@@ -2179,6 +2220,8 @@
           activeTab,
           query,
           quickExts,
+          hotSearches,
+          selectHotSearch,
           loading,
           searched,
           results,

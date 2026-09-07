@@ -15,9 +15,46 @@ import {
   Database,
   Hash,
   Layers,
-  Sparkles
+  Sparkles,
+  Flame,
+  Clock,
+  RotateCw,
+  X,
+  TrendingUp
 } from 'lucide-react';
 import { FileRecord, ShareRecord } from '../types';
+
+interface HotSearchItem {
+  id: string;
+  keyword: string;
+  label: string;
+  category: 'movie' | 'tech' | 'music' | 'doc';
+  badge?: string;
+  badgeStyle?: 'top' | 'hot' | 'new' | 'quality';
+}
+
+const ALL_HOT_SEARCHES: HotSearchItem[] = [
+  { id: '1', keyword: '星际穿越', label: '星际穿越 4K', category: 'movie', badge: 'TOP 1', badgeStyle: 'top' },
+  { id: '2', keyword: '奥本海默', label: '奥本海默 IMAX', category: 'movie', badge: 'HOT', badgeStyle: 'hot' },
+  { id: '3', keyword: '沙丘2', label: '沙丘2 杜比视界', category: 'movie', badge: 'HOT', badgeStyle: 'hot' },
+  { id: '4', keyword: 'DDIA', label: 'DDIA 数据密集型', category: 'tech', badge: '必读', badgeStyle: 'quality' },
+  { id: '5', keyword: 'PostgreSQL', label: 'PostgreSQL 架构', category: 'tech', badge: '核心', badgeStyle: 'quality' },
+  { id: '6', keyword: '地球脉动', label: '地球脉动 III 4K', category: 'doc', badge: '4K HDR', badgeStyle: 'quality' },
+  { id: '7', keyword: 'Hans Zimmer', label: 'Hans Zimmer 原声', category: 'music', badge: '母带', badgeStyle: 'quality' },
+  { id: '8', keyword: 'Beethoven', label: '贝多芬 9号交响曲', category: 'music', badge: 'Hi-Res', badgeStyle: 'quality' },
+  { id: '9', keyword: 'Kubernetes', label: 'K8s 生产级实战', category: 'tech', badge: 'NEW', badgeStyle: 'new' },
+  { id: '10', keyword: '4K', label: '4K 原盘合集', category: 'movie', badge: '超清', badgeStyle: 'hot' },
+  { id: '11', keyword: 'FLAC', label: 'FLAC 24bit Hi-Res', category: 'music', badge: '无损', badgeStyle: 'quality' },
+  { id: '12', keyword: '架构师', label: '架构师核心路线', category: 'tech', badge: '精选', badgeStyle: 'quality' },
+];
+
+const HOT_CATEGORIES = [
+  { id: 'all', name: '全部' },
+  { id: 'movie', name: '🎬 影视' },
+  { id: 'tech', name: '💻 技术' },
+  { id: 'music', name: '🎵 音乐' },
+  { id: 'doc', name: '🌍 纪录片' },
+] as const;
 
 interface SearchEngineViewProps {
   shares: ShareRecord[];
@@ -38,6 +75,18 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   const [sizeFilter, setSizeFilter] = useState<'all' | 'small' | 'medium' | 'large' | 'huge'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState<number | null>(null);
+
+  // Popular / Hot searches states
+  const [selectedHotCat, setSelectedHotCat] = useState<'all' | 'movie' | 'tech' | 'music' | 'doc'>('all');
+  const [shuffleOffset, setShuffleOffset] = useState(0);
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('115_recent_searches');
+      return stored ? JSON.parse(stored) : ['星际穿越', 'DDIA', 'Hans Zimmer'];
+    } catch {
+      return ['星际穿越', 'DDIA', 'Hans Zimmer'];
+    }
+  });
 
   const quickExts = ['mkv', 'mp4', 'pdf', 'zip', 'iso', 'flac', 'epub'];
 
@@ -60,6 +109,59 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
     if (['pdf', 'epub', 'mobi', 'txt'].includes(ext)) return <BookOpen className="w-5 h-5 text-rose-500 shrink-0" />;
     if (['zip', 'rar', '7z', 'tar', 'iso'].includes(ext)) return <Archive className="w-5 h-5 text-blue-500 shrink-0" />;
     return <File className="w-5 h-5 text-slate-400 shrink-0" />;
+  };
+
+  // Filtered hot searches based on category and shuffle offset
+  const displayedHotSearches = useMemo(() => {
+    let filtered = selectedHotCat === 'all' 
+      ? ALL_HOT_SEARCHES 
+      : ALL_HOT_SEARCHES.filter(h => h.category === selectedHotCat);
+
+    if (selectedHotCat === 'all' && shuffleOffset > 0) {
+      const offset = shuffleOffset % filtered.length;
+      filtered = [...filtered.slice(offset), ...filtered.slice(0, offset)];
+    }
+    return filtered;
+  }, [selectedHotCat, shuffleOffset]);
+
+  const handleSelectKeyword = (kw: string) => {
+    setKeyword(kw);
+    // Add to recent searches (deduplicated, max 6 items)
+    setRecentSearches(prev => {
+      const updated = [kw, ...prev.filter(s => s.toLowerCase() !== kw.toLowerCase())].slice(0, 6);
+      try {
+        localStorage.setItem('115_recent_searches', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveRecent = (kw: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRecentSearches(prev => {
+      const updated = prev.filter(s => s !== kw);
+      try {
+        localStorage.setItem('115_recent_searches', JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+  };
+
+  const handleClearRecent = () => {
+    setRecentSearches([]);
+    try {
+      localStorage.removeItem('115_recent_searches');
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleShuffleHot = () => {
+    setShuffleOffset(prev => prev + 3);
   };
 
   // Filtered Results with PostgreSQL Trigram & Full Path Simulation
@@ -125,12 +227,128 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           {keyword && (
             <button
               onClick={() => setKeyword('')}
-              className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 px-2 py-1 text-xs font-medium bg-slate-100 rounded-md"
+              className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 px-2 py-1 text-xs font-medium bg-slate-100 rounded-md transition"
             >
               清空
             </button>
           )}
         </div>
+
+        {/* Popular / Hot Searches (热门搜索快速填入) */}
+        <div className="space-y-2 pt-1 border-t border-slate-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 overflow-x-auto text-nowrap scrollbar-none pb-0.5">
+              <span className="font-bold text-slate-800 flex items-center gap-1 shrink-0">
+                <Flame className="w-4 h-4 text-orange-500 fill-orange-500/20 shrink-0" />
+                热门搜索:
+              </span>
+              {/* Category Pills */}
+              <div className="flex items-center gap-1 shrink-0">
+                {HOT_CATEGORIES.map(cat => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setSelectedHotCat(cat.id)}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition ${
+                      selectedHotCat === cat.id
+                        ? 'bg-orange-500 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between sm:justify-end gap-2 text-[11px] text-slate-400 shrink-0">
+              <span className="hidden md:inline">轻触关键词即刻过滤</span>
+              <button
+                type="button"
+                onClick={handleShuffleHot}
+                className="flex items-center gap-1 text-slate-500 hover:text-orange-600 transition px-1.5 py-0.5 rounded hover:bg-orange-50 font-medium"
+                title="换一批热门关键词"
+              >
+                <RotateCw className="w-3 h-3" />
+                <span>换一批</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Hot Search Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap scrollbar-none text-nowrap">
+            {displayedHotSearches.map((item) => {
+              const isActive = keyword.trim().toLowerCase() === item.keyword.toLowerCase();
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectKeyword(item.keyword)}
+                  className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition border shrink-0 min-h-[32px] ${
+                    isActive
+                      ? 'bg-orange-50 border-orange-400 text-orange-800 font-bold shadow-xs ring-1 ring-orange-300/70'
+                      : 'bg-slate-50 hover:bg-slate-100 hover:border-slate-300 border-slate-200 text-slate-700'
+                  }`}
+                  title={`快速填入关键词: ${item.keyword}`}
+                >
+                  <span>{item.label}</span>
+                  {item.badge && (
+                    <span className={`text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-tight ${
+                      item.badgeStyle === 'top' 
+                        ? 'bg-rose-500 text-white' 
+                        : item.badgeStyle === 'hot' 
+                        ? 'bg-orange-500 text-white' 
+                        : item.badgeStyle === 'new'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Recent Search History if any */}
+        {recentSearches.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto text-xs text-slate-500 pt-1 border-t border-dashed border-slate-100 scrollbar-none">
+            <span className="flex items-center gap-1 shrink-0 text-slate-400 text-[11px] font-medium">
+              <Clock className="w-3 h-3 text-slate-400" />
+              <span>历史:</span>
+            </span>
+            {recentSearches.map((kw, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-0.5 rounded-md text-[11px] shrink-0 transition"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSelectKeyword(kw)}
+                  className="hover:text-blue-600 font-medium"
+                >
+                  {kw}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => handleRemoveRecent(kw, e)}
+                  className="hover:text-rose-500 text-slate-400 p-0.5 rounded"
+                  title="删除此条记录"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              onClick={handleClearRecent}
+              className="text-[10px] text-slate-400 hover:text-rose-500 shrink-0 ml-1 transition"
+            >
+              清空
+            </button>
+          </div>
+        )}
 
         {/* Filters Controls Row */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs border-t border-slate-100">
@@ -312,14 +530,31 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             );
           })
         ) : (
-          <div className="bg-white rounded-2xl p-8 sm:p-12 border border-slate-200 text-center space-y-3">
+          <div className="bg-white rounded-2xl p-6 sm:p-10 border border-slate-200 text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
               <Search className="w-6 h-6" />
             </div>
-            <h4 className="text-base font-semibold text-slate-700">未找到符合条件的文件资源</h4>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              您可以尝试缩短搜索词、重置后缀筛选条件，或者前往「提交链接」模块添加新的 115 分享链接。
-            </p>
+            <div className="space-y-1">
+              <h4 className="text-base font-semibold text-slate-700">未找到符合条件的文件资源</h4>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                您可以尝试缩短搜索词、重置后缀筛选条件，或直接点击以下热门推荐快速填入：
+              </p>
+            </div>
+
+            {/* Quick hot recommendations in empty state */}
+            <div className="flex items-center justify-center flex-wrap gap-2 pt-2 max-w-md mx-auto">
+              {ALL_HOT_SEARCHES.slice(0, 6).map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectKeyword(item.keyword)}
+                  className="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow-2xs"
+                >
+                  <Flame className="w-3 h-3 text-orange-500 fill-orange-500/20" />
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
