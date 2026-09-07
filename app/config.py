@@ -88,6 +88,16 @@ class Settings(BaseSettings):
         default=3,
         description="Minimum number of healthy available proxies; if available count drops below this, fetch from API on demand"
     )
+
+    # Admin Portal Authorization Settings (管理入口与后台权限)
+    ADMIN_SECRET: str = Field(
+        default="admin115",
+        description="Secret key or token required to access administrative portal, task manager, and proxy configs"
+    )
+    ADMIN_AUTH_ENABLED: bool = Field(
+        default=True,
+        description="Whether admin authorization is enforced on management actions"
+    )
     PROXY_POOL_FETCH_COOLDOWN: float = Field(
         default=15.0,
         description="Minimum interval in seconds between consecutive API fetches to prevent hitting provider rate limits"

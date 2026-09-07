@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   Search, 
-  ListChecks,
+  ListChecks, 
   FileCode, 
   FolderTree, 
   PlusCircle, 
@@ -17,7 +17,12 @@ import {
   Menu,
   X,
   SlidersHorizontal,
-  ChevronRight
+  ChevronRight,
+  Lock,
+  Unlock,
+  LogOut,
+  Key,
+  ShieldAlert
 } from 'lucide-react';
 import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
 import { SearchEngineView } from './components/SearchEngineView';
@@ -28,7 +33,11 @@ import { ImporterView } from './components/BatchImportModal';
 import { DirectoryTreeView } from './components/DirectoryTreeView';
 import { ApiTester } from './components/ApiTester';
 import { ProxyManagerView } from './components/ProxyManagerView';
+import { AdminAuthModal } from './components/AdminAuthModal';
+import { AdminConsoleBar } from './components/AdminConsoleBar';
 import { ActiveTab, FileRecord, ShareRecord } from './types';
+
+const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy'];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('search');
@@ -38,9 +47,56 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState<string>('');
   const [mobileMoreOpen, setMobileMoreOpen] = useState<boolean>(false);
 
+  // Admin Authorization State
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    try {
+      return !!localStorage.getItem('115_admin_token') || !!sessionStorage.getItem('115_admin_token');
+    } catch {
+      return false;
+    }
+  });
+  const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
+  const [targetAdminTab, setTargetAdminTab] = useState<ActiveTab>('tasks');
+
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 2500);
+  };
+
+  const handleOpenAdmin = (subTab: ActiveTab = 'tasks') => {
+    setTargetAdminTab(subTab);
+    if (!isAdmin) {
+      setAuthModalOpen(true);
+    } else {
+      setActiveTab(subTab);
+    }
+  };
+
+  const handleAdminAuthSuccess = (_token: string) => {
+    setIsAdmin(true);
+    setAuthModalOpen(false);
+    setActiveTab(targetAdminTab);
+    showToast('管理员身份验证通过，已解锁管理后台！');
+  };
+
+  const handleAdminLogout = () => {
+    try {
+      localStorage.removeItem('115_admin_token');
+      sessionStorage.removeItem('115_admin_token');
+    } catch {}
+    setIsAdmin(false);
+    showToast('已安全退出管理后台');
+    if (ADMIN_TABS.includes(activeTab)) {
+      setActiveTab('search');
+    }
+  };
+
+  const handleSafeTabSwitch = (tab: ActiveTab) => {
+    if (ADMIN_TABS.includes(tab) && !isAdmin) {
+      handleOpenAdmin(tab);
+      return;
+    }
+    setActiveTab(tab);
   };
 
   const handleImportSuccess = (newShare: ShareRecord, newFiles: FileRecord[]) => {
@@ -211,35 +267,6 @@ export default function App() {
               </button>
 
               <button
-                id="nav-tasks-tab"
-                onClick={() => setActiveTab('tasks')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition relative ${
-                  activeTab === 'tasks'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <ListChecks className="w-3.5 h-3.5" />
-                任务监控
-                {pendingCount > 0 && (
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-                )}
-              </button>
-
-              <button
-                id="nav-import-tab"
-                onClick={() => setActiveTab('import')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'import'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                提交链接
-              </button>
-
-              <button
                 id="nav-tree-tab"
                 onClick={() => setActiveTab('tree')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
@@ -250,32 +277,6 @@ export default function App() {
               >
                 <Layers className="w-3.5 h-3.5" />
                 层级目录
-              </button>
-
-              <button
-                id="nav-crawler-tab"
-                onClick={() => setActiveTab('crawler')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'crawler'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <FolderTree className="w-3.5 h-3.5" />
-                爬虫引擎
-              </button>
-
-              <button
-                id="nav-proxy-tab"
-                onClick={() => setActiveTab('proxy')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'proxy'
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                代理池矩阵
               </button>
 
               <button
@@ -303,11 +304,63 @@ export default function App() {
                 <BookOpen className="w-3.5 h-3.5" />
                 REST API
               </button>
+
+              {/* Admin Entrance / Console Navigation Button */}
+              {!isAdmin ? (
+                <button
+                  id="nav-admin-gate-btn"
+                  onClick={() => handleOpenAdmin('tasks')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300/80"
+                  title="管理员访问入口（需口令授权）"
+                >
+                  <Lock className="w-3.5 h-3.5 text-blue-600" />
+                  <span>管理入口</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-white text-slate-500 border border-slate-200 font-mono">
+                    需授权
+                  </span>
+                </button>
+              ) : (
+                <button
+                  id="nav-admin-console-btn"
+                  onClick={() => setActiveTab('tasks')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                    ADMIN_TABS.includes(activeTab)
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200'
+                  }`}
+                  title="管理控制台已授权"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>管理后台</span>
+                  {pendingCount > 0 && (
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                  )}
+                </button>
+              )}
             </nav>
+
+            {/* Desktop Header Right Status - Only shown when authorized */}
+            {isAdmin && (
+              <div className="hidden md:flex items-center gap-2 pl-3 border-l border-slate-200">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  管理员已授权
+                </div>
+                <button
+                  id="header-logout-btn"
+                  onClick={handleAdminLogout}
+                  className="px-2 py-1 text-[11px] font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition flex items-center gap-1"
+                  title="退出管理员身份"
+                >
+                  <LogOut className="w-3 h-3" />
+                  <span>退出</span>
+                </button>
+              </div>
+            )}
 
             {/* Mobile Header Right Actions */}
             <div className="flex md:hidden items-center gap-2">
-              {pendingCount > 0 && (
+              {pendingCount > 0 && isAdmin && (
                 <button
                   onClick={() => setActiveTab('tasks')}
                   className="px-2 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[11px] font-semibold flex items-center gap-1"
@@ -319,7 +372,7 @@ export default function App() {
               <button
                 onClick={() => setMobileMoreOpen(true)}
                 className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
-                aria-label="打开系统与工具菜单"
+                aria-label="打开系统与管理菜单"
               >
                 <SlidersHorizontal className="w-4 h-4" />
               </button>
@@ -330,6 +383,74 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-8">
+        {/* If user navigated to an Admin Tab */}
+        {ADMIN_TABS.includes(activeTab) && (
+          isAdmin ? (
+            <>
+              {/* Admin Console Top Bar */}
+              <AdminConsoleBar
+                currentTab={activeTab}
+                onTabChange={setActiveTab}
+                onLogout={handleAdminLogout}
+                pendingTasksCount={pendingCount}
+              />
+
+              {/* Active Admin View */}
+              {activeTab === 'tasks' && (
+                <ShareTaskManager
+                  shares={shares}
+                  onTriggerCrawl={handleTriggerCrawl}
+                  onOpenTree={handleOpenTree}
+                  onSearchByShare={handleSearchByShare}
+                  onReportShare={handleReportShare}
+                  onOpenImport={() => setActiveTab('import')}
+                  onBatchTriggerCrawl={handleBatchTriggerCrawl}
+                  onExportShares={handleExportShares}
+                />
+              )}
+
+              {activeTab === 'import' && (
+                <ImporterView 
+                  existingShares={shares}
+                  onImportSuccess={handleImportSuccess} 
+                  onNavigateToTasks={() => setActiveTab('tasks')}
+                />
+              )}
+
+              {activeTab === 'crawler' && <CrawlerVisualizer />}
+              
+              {activeTab === 'proxy' && <ProxyManagerView />}
+            </>
+          ) : (
+            /* Admin Gate Card for unauthenticated direct visitors */
+            <div className="max-w-xl mx-auto my-12 bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-lg animate-in fade-in">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 mx-auto flex items-center justify-center mb-4">
+                <ShieldAlert className="w-7 h-7" />
+              </div>
+              <h2 className="text-lg font-bold text-slate-900 mb-2">需要管理员授权访问</h2>
+              <p className="text-xs text-slate-500 mb-6 leading-relaxed max-w-md mx-auto">
+                任务监控、爬虫并发拓扑、防封代理池矩阵与链接导入属于受保护的管理功能。请在管理入口验证口令后继续。
+              </p>
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  onClick={() => setActiveTab('search')}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+                >
+                  返回公开搜索
+                </button>
+                <button
+                  onClick={() => handleOpenAdmin(activeTab)}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition flex items-center gap-1.5"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  验证管理员口令
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        {/* Public Views */}
         {activeTab === 'search' && (
           <SearchEngineView
             shares={shares}
@@ -338,31 +459,6 @@ export default function App() {
             onReportShare={handleReportShare}
           />
         )}
-
-        {activeTab === 'tasks' && (
-          <ShareTaskManager
-            shares={shares}
-            onTriggerCrawl={handleTriggerCrawl}
-            onOpenTree={handleOpenTree}
-            onSearchByShare={handleSearchByShare}
-            onReportShare={handleReportShare}
-            onOpenImport={() => setActiveTab('import')}
-            onBatchTriggerCrawl={handleBatchTriggerCrawl}
-            onExportShares={handleExportShares}
-          />
-        )}
-
-        {activeTab === 'import' && (
-          <ImporterView 
-            existingShares={shares}
-            onImportSuccess={handleImportSuccess} 
-            onNavigateToTasks={() => setActiveTab('tasks')}
-          />
-        )}
-
-        {activeTab === 'crawler' && <CrawlerVisualizer />}
-        
-        {activeTab === 'proxy' && <ProxyManagerView />}
 
         {activeTab === 'tree' && (
           <DirectoryTreeView
@@ -391,6 +487,14 @@ export default function App() {
             <span>BFS 遍历</span>
             <span>·</span>
             <span>OpenList / AList 节点兼容</span>
+            <span>·</span>
+            <button 
+              onClick={() => handleOpenAdmin('tasks')}
+              className="text-slate-500 hover:text-blue-600 transition flex items-center gap-1"
+            >
+              <Lock className="w-3 h-3" />
+              管理后台
+            </button>
           </div>
         </div>
       </footer>
@@ -411,33 +515,6 @@ export default function App() {
         </button>
 
         <button
-          onClick={() => setActiveTab('tasks')}
-          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 relative ${
-            activeTab === 'tasks' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <div className="relative">
-            <ListChecks className={`w-5 h-5 ${activeTab === 'tasks' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
-            {pendingCount > 0 && (
-              <span className="absolute -top-1 -right-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white animate-pulse"></span>
-            )}
-          </div>
-          <span>任务</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('import')}
-          className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
-            activeTab === 'import' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <div className={`p-1 rounded-lg ${activeTab === 'import' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}>
-            <PlusCircle className="w-4 h-4" />
-          </div>
-          <span>提交</span>
-        </button>
-
-        <button
           onClick={() => setActiveTab('tree')}
           className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
             activeTab === 'tree' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
@@ -447,17 +524,63 @@ export default function App() {
           <span>目录</span>
         </button>
 
+        {isAdmin ? (
+          <>
+            <button
+              onClick={() => setActiveTab('tasks')}
+              className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 relative ${
+                activeTab === 'tasks' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <div className="relative">
+                <ListChecks className={`w-5 h-5 ${activeTab === 'tasks' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white animate-pulse"></span>
+                )}
+              </div>
+              <span>任务</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('proxy')}
+              className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
+                activeTab === 'proxy' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <ShieldCheck className={`w-5 h-5 ${activeTab === 'proxy' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+              <span>代理</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => setActiveTab('code')}
+              className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
+                activeTab === 'code' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <FileCode className={`w-5 h-5 ${activeTab === 'code' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
+              <span>源码</span>
+            </button>
+
+            <button
+              onClick={() => handleOpenAdmin('tasks')}
+              className="flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 text-slate-500 hover:text-blue-600"
+            >
+              <Lock className="w-5 h-5 stroke-[1.75] text-slate-400" />
+              <span>管理</span>
+            </button>
+          </>
+        )}
+
         <button
           onClick={() => setMobileMoreOpen(true)}
           className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 relative ${
-            ['crawler', 'proxy', 'code', 'api'].includes(activeTab) ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
+            ['crawler', 'api'].includes(activeTab) ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          <SlidersHorizontal className={`w-5 h-5 ${['crawler', 'proxy', 'code', 'api'].includes(activeTab) ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
-          <span>系统</span>
-          {['crawler', 'proxy', 'code', 'api'].includes(activeTab) && (
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-0.5"></span>
-          )}
+          <SlidersHorizontal className="w-5 h-5 stroke-[1.75]" />
+          <span>更多</span>
         </button>
       </nav>
 
@@ -474,7 +597,7 @@ export default function App() {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-4 rounded bg-blue-600"></div>
-                <h3 className="font-bold text-slate-900 text-sm">系统工具与工程组件</h3>
+                <h3 className="font-bold text-slate-900 text-sm">功能导航与管理控制</h3>
               </div>
               <button 
                 onClick={() => setMobileMoreOpen(false)}
@@ -484,54 +607,147 @@ export default function App() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                onClick={() => { setActiveTab('crawler'); setMobileMoreOpen(false); }}
-                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
-                  activeTab === 'crawler' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <FolderTree className="w-4 h-4 text-blue-600" />
-                <span className="text-xs font-bold">爬虫引擎状态</span>
-                <span className="text-[10px] text-slate-400">BFS 递归与抓取拓扑</span>
-              </button>
+            {/* Admin Status Card in Mobile */}
+            <div className={`p-3 rounded-xl border flex items-center justify-between ${
+              isAdmin ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-slate-50 border-slate-200 text-slate-700'
+            }`}>
+              <div className="flex items-center gap-2">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                  isAdmin ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                }`}>
+                  {isAdmin ? <ShieldCheck className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                </div>
+                <div>
+                  <div className="text-xs font-bold">
+                    {isAdmin ? '管理员身份已授权' : '管理权限未验证'}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {isAdmin ? '可操作任务监控、代理池与爬虫' : '任务与代理配置已隐藏保护'}
+                  </div>
+                </div>
+              </div>
+              {isAdmin ? (
+                <button
+                  onClick={() => {
+                    handleAdminLogout();
+                    setMobileMoreOpen(false);
+                  }}
+                  className="px-2.5 py-1 text-xs font-semibold bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition"
+                >
+                  退出登录
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    setMobileMoreOpen(false);
+                    handleOpenAdmin('tasks');
+                  }}
+                  className="px-2.5 py-1 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                >
+                  前往授权
+                </button>
+              )}
+            </div>
 
-              <button
-                onClick={() => { setActiveTab('proxy'); setMobileMoreOpen(false); }}
-                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
-                  activeTab === 'proxy' ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                <span className="text-xs font-bold">代理池矩阵</span>
-                <span className="text-[10px] text-slate-400">IP 轮换与反封禁策略</span>
-              </button>
+            {/* Protected Admin Navigation (if authorized) */}
+            {isAdmin && (
+              <div>
+                <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                  管理后台模块
+                </h4>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    onClick={() => { setActiveTab('tasks'); setMobileMoreOpen(false); }}
+                    className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                      activeTab === 'tasks' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <ListChecks className="w-4 h-4 text-blue-600" />
+                    <span className="text-xs font-bold">任务监控调度</span>
+                    <span className="text-[10px] text-slate-400">状态流转与重试</span>
+                  </button>
 
-              <button
-                onClick={() => { setActiveTab('code'); setMobileMoreOpen(false); }}
-                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
-                  activeTab === 'code' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <FileCode className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-bold">项目完整源码</span>
-                <span className="text-[10px] text-slate-400">FastAPI/Worker/Crawler</span>
-              </button>
+                  <button
+                    onClick={() => { setActiveTab('import'); setMobileMoreOpen(false); }}
+                    className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                      activeTab === 'import' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <PlusCircle className="w-4 h-4 text-emerald-600" />
+                    <span className="text-xs font-bold">批量提交链接</span>
+                    <span className="text-[10px] text-slate-400">正则解析与异步入队</span>
+                  </button>
 
-              <button
-                onClick={() => { setActiveTab('api'); setMobileMoreOpen(false); }}
-                className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
-                  activeTab === 'api' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <BookOpen className="w-4 h-4 text-amber-600" />
-                <span className="text-xs font-bold">RESTful API 调试</span>
-                <span className="text-[10px] text-slate-400">Swagger 交互式请求</span>
-              </button>
+                  <button
+                    onClick={() => { setActiveTab('crawler'); setMobileMoreOpen(false); }}
+                    className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                      activeTab === 'crawler' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <FolderTree className="w-4 h-4 text-blue-600" />
+                    <span className="text-xs font-bold">爬虫引擎状态</span>
+                    <span className="text-[10px] text-slate-400">BFS 递归与抓取拓扑</span>
+                  </button>
+
+                  <button
+                    onClick={() => { setActiveTab('proxy'); setMobileMoreOpen(false); }}
+                    className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                      activeTab === 'proxy' ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-bold">代理池防封矩阵</span>
+                    <span className="text-[10px] text-slate-400">IP 轮换与反封禁策略</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Public Development Tools */}
+            <div>
+              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                公开工程与文档
+              </h4>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  onClick={() => { setActiveTab('code'); setMobileMoreOpen(false); }}
+                  className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                    activeTab === 'code' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <FileCode className="w-4 h-4 text-emerald-600" />
+                  <span className="text-xs font-bold">项目完整源码</span>
+                  <span className="text-[10px] text-slate-400">FastAPI/Worker/Crawler</span>
+                </button>
+
+                <button
+                  onClick={() => { setActiveTab('api'); setMobileMoreOpen(false); }}
+                  className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
+                    activeTab === 'api' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <BookOpen className="w-4 h-4 text-amber-600" />
+                  <span className="text-xs font-bold">RESTful API 调试</span>
+                  <span className="text-[10px] text-slate-400">Swagger 交互式请求</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Admin Authorization Modal */}
+      <AdminAuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={handleAdminAuthSuccess}
+        targetTabName={
+          targetAdminTab === 'tasks' ? '任务监控与调度' :
+          targetAdminTab === 'proxy' ? '代理池矩阵与防封' :
+          targetAdminTab === 'crawler' ? '爬虫引擎拓扑' :
+          targetAdminTab === 'import' ? '批量分享导入' : '管理控制台'
+        }
+      />
 
       {/* Toast */}
       {toastMsg && (

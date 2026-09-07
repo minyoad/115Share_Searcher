@@ -314,3 +314,23 @@ class ProxyConfigUpdateRequest(BaseModel):
     crawler_rate_min: Optional[float] = Field(default=None, description="请求最小间隔秒数 (如 0.05)")
     crawler_rate_max: Optional[float] = Field(default=None, description="请求最大间隔秒数 (如 0.15)")
 
+
+class AdminVerifyRequest(BaseModel):
+    """管理员授权口令验证请求"""
+    token: str = Field(description="管理员授权口令或密钥")
+
+
+class AdminVerifyResponse(BaseModel):
+    """管理员授权响应"""
+    authenticated: bool
+    message: str
+    token: Optional[str] = None
+
+
+class AdminStatusResponse(BaseModel):
+    """管理员入口状态"""
+    auth_enabled: bool
+    authenticated: bool
+    message: str
+
+

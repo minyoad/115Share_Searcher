@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +18,9 @@ from app.database import get_db, init_db
 from app.models import File, Share, ShareStatus
 from app.proxy import ProxyManager
 from app.schemas import (
+    AdminStatusResponse,
+    AdminVerifyRequest,
+    AdminVerifyResponse,
     BatchCrawlRequest,
     BatchCrawlResponse,
     BatchImportRequest,
@@ -1064,5 +1067,62 @@ async def manual_recover_stuck_tasks(
         "recovered_count": count,
         "message": f"死锁扫描与恢复完成，已成功恢复并重新入队 {count} 个卡死分享任务。"
     }
+
+
+# ==============================================================================
+# Admin Portal & Authorization Endpoints (管理入口与鉴权)
+# ==============================================================================
+
+@app.post(
+    "/api/v1/admin/verify",
+    response_model=AdminVerifyResponse,
+    summary="验证管理员授权口令或密钥",
+)
+async def verify_admin_auth(payload: AdminVerifyRequest):
+    """
+    验证管理员口令或 Token。通过验证后授权访问任务监控、链接提交、爬虫引擎及代理池配置管理
+    """
+    if not settings.ADMIN_AUTH_ENABLED:
+        return AdminVerifyResponse(
+            authenticated=True,
+            message="系统未开启口令保护，已直接开放管理权限",
+            token=payload.token or "unprotected"
+        )
+
+    if payload.token and payload.token.strip() == settings.ADMIN_SECRET.strip():
+        return AdminVerifyResponse(
+            authenticated=True,
+            message="管理员授权验证通过，已解锁管理入口",
+            token=payload.token.strip()
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="管理员凭证口令不正确，请重新输入"
+        )
+
+
+@app.get(
+    "/api/v1/admin/status",
+    response_model=AdminStatusResponse,
+    summary="查询管理入口鉴权状态",
+)
+async def get_admin_status(
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+    admin_token: Optional[str] = Query(None, alias="admin_token")
+):
+    """
+    检查当前客户端是否已具备管理员授权状态
+    """
+    provided = x_admin_token or admin_token
+    is_auth = (not settings.ADMIN_AUTH_ENABLED) or (
+        bool(provided) and provided.strip() == settings.ADMIN_SECRET.strip()
+    )
+    return AdminStatusResponse(
+        auth_enabled=settings.ADMIN_AUTH_ENABLED,
+        authenticated=is_auth,
+        message="已授权访问管理控制台" if is_auth else "未授权，需在管理入口验证口令"
+    )
+
 
 
