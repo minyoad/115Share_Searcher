@@ -466,8 +466,9 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             // 精确计算该文件所在目录的 115 CID
             const targetCid = item.is_dir ? item.file_115_id : (item.parent_115_id || '0');
             const isRoot = !targetCid || targetCid === '0';
+            const cidQuery = !isRoot ? (pwd ? `&cid=${targetCid}` : `?cid=${targetCid}`) : '';
             const cidHash = !isRoot ? `#cid=${targetCid}` : '';
-            const directCidUrl = item.cid_share_url || `https://115.com/s/${item.share_code}${pwd}${cidHash}`;
+            const directCidUrl = item.cid_share_url || `https://115.com/s/${item.share_code}${pwd}${cidQuery}${cidHash}`;
 
             return (
               <div

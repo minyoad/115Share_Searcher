@@ -107,6 +107,18 @@ async def serve_index():
     return HTMLResponse("<h1>115 Share Search Service API is running.</h1><p>Visit /docs for Swagger UI</p>")
 
 
+@app.get("/115-cid-helper.user.js")
+async def serve_cid_helper_script():
+    """Direct install route for the Tampermonkey CID helper userscript"""
+    script_file = os.path.join(static_dir, "115-cid-helper.user.js")
+    if os.path.exists(script_file):
+        return FileResponse(script_file, media_type="application/javascript; charset=utf-8")
+    public_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public", "115-cid-helper.user.js")
+    if os.path.exists(public_file):
+        return FileResponse(public_file, media_type="application/javascript; charset=utf-8")
+    return HTMLResponse("// Userscript not found", status_code=404)
+
+
 @app.get("/api/v1/health")
 async def health_check():
     """Health check endpoint"""
@@ -735,8 +747,9 @@ async def search_resources(
         # 精确计算目标目录 CID：若为文件夹，则为其自身 CID；若为文件，则为其所在父目录 CID
         target_cid = file_obj.file_115_id if file_obj.is_dir else (file_obj.parent_115_id or "0")
         is_root = not target_cid or target_cid == "0"
+        cid_query = (f"&cid={target_cid}" if pwd_suffix else f"?cid={target_cid}") if not is_root else ""
         cid_hash = f"#cid={target_cid}" if not is_root else ""
-        cid_share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}{cid_hash}"
+        cid_share_url = f"https://115.com/s/{share_obj.share_code}{pwd_suffix}{cid_query}{cid_hash}"
 
         items.append(
             SearchResultItem(
