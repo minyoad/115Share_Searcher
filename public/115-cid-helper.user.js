@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         115 分享链接 CID 直达 & 自动免密助手 (增强版)
 // @namespace    https://115.com/
-// @version      1.2.0
-// @description  自动解析 115 分享链接中的提取码并秒级自动免密提交；自动将根目录请求重定向至目标 CID 子目录，告别从根目录逐层手动翻找！
+// @version      1.2.1
+// @description  自动解析 115 分享链接中的提取码并秒级自动免密提交；自动将根目录请求重定向至目标 CID 子目录。当 URL 无 CID 参数时保持纯净普通浏览，不显示任何注入提示框。
 // @author       115 Search Service
 // @match        *://115.com/s/*
 // @match        *://*.115.com/s/*
@@ -44,18 +44,24 @@
   }
 
   const { pwd, targetCid } = parseParams();
+  // 当 URL 明确包含有效 CID 时才激活 CID 重定向模式与 UI 提示框；无 CID 时为普通 115 浏览，不注入任何提示框
+  const hasTargetCid = Boolean(targetCid && targetCid !== '0');
   let autoSubmitted = false;
   let redirectedCount = 0;
 
-  console.log(`[115-CID-Helper v1.2.0] 初始化成功 | 提取码: "${pwd}" | 目标CID: "${targetCid}"`);
+  if (hasTargetCid) {
+    console.log(`[115-CID-Helper v1.2.1] 目标CID模式激活 | 提取码: "${pwd}" | 目标CID: "${targetCid}"`);
+  } else {
+    console.log(`[115-CID-Helper v1.2.1] 普通115浏览模式 (URL无CID参数，静默免打扰，不显示注入提示框)`);
+  }
 
   // 2. 网络层深度拦截：在请求到达 115 官方服务器前，自动注入目标 CID 与 提取码 receive_code
   function rewriteUrl(url) {
     if (typeof url !== 'string' || !url.includes('/share/snap')) return url;
     let newUrl = url;
 
-    // 注入 CID (将默认 0 替换为用户目标 CID)
-    if (targetCid && targetCid !== '0') {
+    // 注入 CID (仅当存在有效目标 CID 时才重定向，否则保持官方原始路径)
+    if (hasTargetCid) {
       if (newUrl.includes('cid=0')) {
         newUrl = newUrl.replace(/([?&]cid=)0(?=[&]|$)/, `$1${targetCid}`);
       } else if (!newUrl.includes('cid=')) {
@@ -75,7 +81,10 @@
     if (newUrl !== url) {
       redirectedCount++;
       console.log(`[115-CID-Helper] 成功重写 snap 请求 -> ${newUrl}`);
-      showFloatTip(`🚀 正在直达 CID: ${targetCid || '根目录'} (${pwd ? '自动注入密码' : '无密'})`);
+      // 仅在有明确目标 CID 时展示提示，无 CID 时保持纯净不提示
+      if (hasTargetCid) {
+        showFloatTip(`🚀 正在直达 CID: ${targetCid} (${pwd ? '自动注入密码' : '无密'})`);
+      }
     }
     return newUrl;
   }
@@ -85,7 +94,7 @@
     try {
       if (typeof body === 'string') {
         let modified = body;
-        if (targetCid && targetCid !== '0' && modified.includes('cid=0')) {
+        if (hasTargetCid && modified.includes('cid=0')) {
           modified = modified.replace(/([&?]cid=)0(?=[&]|$)/, `$1${targetCid}`);
         }
         if (pwd && (modified.includes('receive_code=&') || modified.endsWith('receive_code='))) {
@@ -96,12 +105,12 @@
         return modified;
       }
       if (body instanceof URLSearchParams) {
-        if (targetCid && targetCid !== '0') body.set('cid', targetCid);
+        if (hasTargetCid) body.set('cid', targetCid);
         if (pwd) body.set('receive_code', pwd);
         return body;
       }
       if (body instanceof FormData) {
-        if (targetCid && targetCid !== '0') body.set('cid', targetCid);
+        if (hasTargetCid) body.set('cid', targetCid);
         if (pwd) body.set('receive_code', pwd);
         return body;
       }
@@ -221,7 +230,9 @@
       }
 
       autoSubmitted = true;
-      showFloatTip(`🔑 已自动填入密码 [${pwd}] 并自动点击跳过`);
+      if (hasTargetCid) {
+        showFloatTip(`🔑 已自动填入密码 [${pwd}] 并自动点击跳过`);
+      }
 
       // 延时检测并清除残留遮罩层
       setTimeout(dismissStuckMasks, 600);
@@ -264,8 +275,9 @@
     }
   }, 250);
 
-  // 6. 悬浮快捷控制台：如果出现弹窗遮挡或特殊情况，提供一键跳过与进入按钮
+  // 6. 悬浮快捷控制台：仅在 URL 明确指定目标 CID 时展示快捷跳过挂件；无 CID 时不显示任何注入提示框
   function renderHelperWidget() {
+    if (!hasTargetCid) return;
     if (document.getElementById('cid-helper-widget')) return;
     const widget = document.createElement('div');
     widget.id = 'cid-helper-widget';
@@ -332,8 +344,9 @@
     });
   }
 
-  // 7. 顶部浮动通知
+  // 7. 顶部浮动通知：仅在 URL 明确指定目标 CID 时展示，无 CID 时不显示任何注入提示框
   function showFloatTip(text) {
+    if (!hasTargetCid) return;
     let tip = document.getElementById('cid-helper-toast');
     if (!tip) {
       tip = document.createElement('div');
@@ -369,8 +382,8 @@
     }, 4500);
   }
 
-  // 挂载小挂件
-  if (targetCid || pwd) {
+  // 挂载小挂件：仅在 URL 明确带有目标 CID 时才挂载；无 CID 时为普通 115 浏览，完全不显示注入提示框与小挂件
+  if (hasTargetCid) {
     if (document.body) {
       renderHelperWidget();
     } else {

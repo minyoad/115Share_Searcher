@@ -129,11 +129,11 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
     return filtered;
   }, [selectedHotCat, shuffleOffset]);
 
-  const handleSelectKeyword = (kw: string) => {
-    setKeyword(kw);
-    // Add to recent searches (deduplicated, max 6 items)
+  const addRecentSearch = (kw: string) => {
+    const trimmed = kw.trim();
+    if (!trimmed) return;
     setRecentSearches(prev => {
-      const updated = [kw, ...prev.filter(s => s.toLowerCase() !== kw.toLowerCase())].slice(0, 6);
+      const updated = [trimmed, ...prev.filter(s => s.toLowerCase() !== trimmed.toLowerCase())].slice(0, 10);
       try {
         localStorage.setItem('115_recent_searches', JSON.stringify(updated));
       } catch {
@@ -141,6 +141,23 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
       }
       return updated;
     });
+  };
+
+  const handleSelectKeyword = (kw: string) => {
+    setKeyword(kw);
+    addRecentSearch(kw);
+  };
+
+  const handleHistoryClick = (kw: string) => {
+    setKeyword(kw);
+    addRecentSearch(kw);
+  };
+
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (keyword.trim()) {
+      addRecentSearch(keyword.trim());
+    }
   };
 
   const handleRemoveRecent = (kw: string, e: React.MouseEvent) => {
@@ -219,28 +236,104 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
     <div className="space-y-4 sm:space-y-6">
       {/* Search Header Hero Bar */}
       <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200 shadow-xs sm:shadow-sm space-y-3 sm:space-y-4">
-        <div className="relative">
-          <Search className="absolute left-3.5 sm:left-4 top-3.5 w-5 h-5 text-slate-400" />
-          <input
-            id="search-input"
-            type="text"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            placeholder="输入全路径关键词 (例如：4K, 流浪地球, Interstellar, 架构师, Hi-Res, FLAC)..."
-            className="w-full pl-11 sm:pl-12 pr-14 py-3 sm:py-3.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 text-sm sm:text-base min-h-[46px]"
-          />
-          {keyword && (
-            <button
-              onClick={() => setKeyword('')}
-              className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 px-2 py-1 text-xs font-medium bg-slate-100 rounded-md transition"
-            >
-              清空
-            </button>
+        {/* Search Input Bar with Submit Button */}
+        <form onSubmit={handleSearchSubmit} className="flex gap-2 sm:gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3.5 sm:left-4 top-3.5 w-5 h-5 text-slate-400" />
+            <input
+              id="search-input"
+              type="text"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="输入全路径关键词 (例如：4K, 流浪地球, Interstellar, 架构师, Hi-Res, FLAC)..."
+              className="w-full pl-11 sm:pl-12 pr-14 py-3 sm:py-3.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-900 text-sm sm:text-base min-h-[46px]"
+            />
+            {keyword && (
+              <button
+                type="button"
+                onClick={() => setKeyword('')}
+                className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 px-2 py-1 text-xs font-medium bg-slate-100 rounded-md transition"
+              >
+                清空
+              </button>
+            )}
+          </div>
+          <button
+            type="submit"
+            className="px-5 sm:px-6 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold rounded-xl text-sm sm:text-base transition shadow-xs flex items-center justify-center gap-1.5 shrink-0 min-h-[46px]"
+          >
+            <Search className="w-4 h-4" />
+            <span>检索</span>
+          </button>
+        </form>
+
+        {/* Search History Area (搜索历史区域 - 位于搜索框正下方) */}
+        <div className="pt-2 border-t border-slate-100 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                搜索历史:
+              </span>
+              <span className="text-[11px] text-slate-400 hidden sm:inline">
+                记录最近搜索词，点击可自动再次触发检索
+              </span>
+            </div>
+            {recentSearches.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearRecent}
+                className="text-[11px] text-slate-400 hover:text-rose-600 flex items-center gap-1 transition px-1.5 py-0.5 rounded hover:bg-rose-50 font-medium"
+                title="清空所有搜索历史"
+              >
+                <X className="w-3 h-3" />
+                <span>清空历史</span>
+              </button>
+            )}
+          </div>
+
+          {recentSearches.length > 0 ? (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap scrollbar-none text-nowrap">
+              {recentSearches.map((kw, i) => {
+                const isActive = keyword.trim().toLowerCase() === kw.toLowerCase();
+                return (
+                  <div
+                    key={`${kw}-${i}`}
+                    className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition border shrink-0 min-h-[30px] ${
+                      isActive
+                        ? 'bg-blue-50 border-blue-400 text-blue-800 font-semibold ring-1 ring-blue-300/70 shadow-2xs'
+                        : 'bg-slate-50 hover:bg-blue-50/60 border-slate-200 hover:border-blue-200 text-slate-700'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleHistoryClick(kw)}
+                      className="hover:text-blue-700 font-medium flex items-center gap-1 text-left"
+                      title={`点击再次检索: ${kw}`}
+                    >
+                      <span>{kw}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleRemoveRecent(kw, e)}
+                      className="text-slate-400 hover:text-rose-500 hover:bg-slate-200/80 p-0.5 rounded-full transition"
+                      title="删除此条记录"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[11px] text-slate-400 py-0.5">
+              暂无搜索历史，输入关键词按回车或点击「检索」后将自动记录
+            </p>
           )}
         </div>
 
         {/* Popular / Hot Searches (热门搜索快速填入) */}
-        <div className="space-y-2 pt-1 border-t border-slate-100">
+        <div className="space-y-2 pt-2 border-t border-slate-100">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-2 overflow-x-auto text-nowrap scrollbar-none pb-0.5">
               <span className="font-bold text-slate-800 flex items-center gap-1 shrink-0">
@@ -315,45 +408,6 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
             })}
           </div>
         </div>
-
-        {/* Recent Search History if any */}
-        {recentSearches.length > 0 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto text-xs text-slate-500 pt-1 border-t border-dashed border-slate-100 scrollbar-none">
-            <span className="flex items-center gap-1 shrink-0 text-slate-400 text-[11px] font-medium">
-              <Clock className="w-3 h-3 text-slate-400" />
-              <span>历史:</span>
-            </span>
-            {recentSearches.map((kw, i) => (
-              <span
-                key={i}
-                className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-0.5 rounded-md text-[11px] shrink-0 transition"
-              >
-                <button
-                  type="button"
-                  onClick={() => handleSelectKeyword(kw)}
-                  className="hover:text-blue-600 font-medium"
-                >
-                  {kw}
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => handleRemoveRecent(kw, e)}
-                  className="hover:text-rose-500 text-slate-400 p-0.5 rounded"
-                  title="删除此条记录"
-                >
-                  <X className="w-2.5 h-2.5" />
-                </button>
-              </span>
-            ))}
-            <button
-              type="button"
-              onClick={handleClearRecent}
-              className="text-[10px] text-slate-400 hover:text-rose-500 shrink-0 ml-1 transition"
-            >
-              清空
-            </button>
-          </div>
-        )}
 
         {/* Filters Controls Row */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs border-t border-slate-100">

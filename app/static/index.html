@@ -145,6 +145,54 @@
             </button>
           </div>
 
+          <!-- Search History Area (搜索历史区域 - 位于搜索框正下方) -->
+          <div class="pt-2 border-t border-slate-100 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-slate-700 flex items-center gap-1.5">
+                <span class="text-blue-500 font-bold">⏱️</span> 搜索历史:
+                <span class="text-[11px] font-normal text-slate-400">点击历史关键词自动再次检索</span>
+              </span>
+              <button 
+                v-if="searchHistory.length > 0"
+                type="button" 
+                @click="clearSearchHistory"
+                class="text-[11px] text-slate-400 hover:text-rose-600 transition px-1.5 py-0.5 rounded hover:bg-rose-50"
+                title="清空所有搜索历史"
+              >
+                清空历史
+              </button>
+            </div>
+            
+            <div v-if="searchHistory.length > 0" class="flex items-center gap-1.5 overflow-x-auto pb-1 text-nowrap scrollbar-none">
+              <div 
+                v-for="kw in searchHistory" 
+                :key="kw"
+                :class="query.keyword.toLowerCase() === kw.toLowerCase() ? 'bg-blue-50 border-blue-400 text-blue-800 font-bold ring-1 ring-blue-300' : 'bg-slate-50 hover:bg-blue-50/50 border-slate-200 text-slate-700'"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition shrink-0"
+              >
+                <button 
+                  type="button"
+                  @click="selectHistorySearch(kw)"
+                  class="hover:text-blue-700 font-medium"
+                  :title="'点击再次检索: ' + kw"
+                >
+                  {{ kw }}
+                </button>
+                <button 
+                  type="button"
+                  @click.stop="removeSearchHistory(kw)"
+                  class="text-slate-400 hover:text-rose-500 hover:bg-slate-200/70 p-0.5 rounded-full transition text-[10px]"
+                  title="删除此条记录"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <p v-else class="text-[11px] text-slate-400 py-0.5">
+              暂无搜索历史，输入关键词回车或点击「立即检索」后将自动记录
+            </p>
+          </div>
+
           <!-- Popular / Hot Searches (热门搜索快速填入) -->
           <div class="pt-2 border-t border-slate-100 space-y-1.5">
             <div class="flex items-center justify-between text-xs">
@@ -1868,6 +1916,45 @@
         const query = ref({ keyword: '', extension: '' });
         const quickExts = ['mkv', 'mp4', 'pdf', 'zip', 'iso', 'flac', 'epub'];
         
+        // Search History State (搜索历史)
+        const searchHistory = ref((() => {
+          try {
+            const stored = localStorage.getItem('115_search_history');
+            return stored ? JSON.parse(stored) : ['星际穿越', 'DDIA', 'Hans Zimmer'];
+          } catch {
+            return ['星际穿越', 'DDIA', 'Hans Zimmer'];
+          }
+        })());
+
+        const addSearchHistory = (kw) => {
+          if (!kw || !kw.trim()) return;
+          const trimmed = kw.trim();
+          searchHistory.value = [trimmed, ...searchHistory.value.filter(s => s.toLowerCase() !== trimmed.toLowerCase())].slice(0, 10);
+          try {
+            localStorage.setItem('115_search_history', JSON.stringify(searchHistory.value));
+          } catch (e) {}
+        };
+
+        const removeSearchHistory = (kw) => {
+          searchHistory.value = searchHistory.value.filter(s => s !== kw);
+          try {
+            localStorage.setItem('115_search_history', JSON.stringify(searchHistory.value));
+          } catch (e) {}
+        };
+
+        const clearSearchHistory = () => {
+          searchHistory.value = [];
+          try {
+            localStorage.removeItem('115_search_history');
+          } catch (e) {}
+        };
+
+        const selectHistorySearch = (kw) => {
+          query.value.keyword = kw;
+          addSearchHistory(kw);
+          doSearch(1);
+        };
+
         const hotSearches = ref([
           { keyword: '星际穿越', label: '星际穿越 4K', badge: 'TOP 1', badgeClass: 'bg-rose-500 text-white' },
           { keyword: '奥本海默', label: '奥本海默 IMAX', badge: 'HOT', badgeClass: 'bg-orange-500 text-white' },
@@ -1881,6 +1968,7 @@
 
         const selectHotSearch = (kw) => {
           query.value.keyword = kw;
+          addSearchHistory(kw);
           doSearch(1);
         };
 
@@ -1931,8 +2019,8 @@
         const userscriptCodeText = ref(`// ==UserScript==
 // @name         115 分享链接 CID 直达 & 自动免密助手 (增强版)
 // @namespace    https://115.com/
-// @version      1.2.0
-// @description  自动解析 115 分享链接中的提取码并秒级自动免密提交；自动将根目录请求重定向至目标 CID 子目录，告别从根目录逐层手动翻找！
+// @version      1.2.1
+// @description  自动解析 115 分享链接中的提取码并秒级自动免密提交；自动将根目录请求重定向至目标 CID 子目录。当 URL 无 CID 参数时保持纯净普通浏览，不显示任何注入提示框。
 // @author       115 Search Service
 // @match        *://115.com/s/*
 // @match        *://*.115.com/s/*
@@ -1970,12 +2058,14 @@
   }
 
   const { pwd, targetCid } = parseParams();
+  // 当 URL 明确包含有效 CID 时才激活 CID 重定向；无 CID 时为普通 115 浏览，不注入任何提示框
+  const hasTargetCid = Boolean(targetCid && targetCid !== '0');
   let autoSubmitted = false;
 
   function rewriteUrl(url) {
     if (typeof url !== 'string' || !url.includes('/share/snap')) return url;
     let newUrl = url;
-    if (targetCid && targetCid !== '0') {
+    if (hasTargetCid) {
       if (newUrl.includes('cid=0')) {
         newUrl = newUrl.replace(/([?&]cid=)0(?=[&]|$)/, \`$1\${targetCid}\`);
       } else if (!newUrl.includes('cid=')) {
@@ -1997,7 +2087,7 @@
     try {
       if (typeof body === 'string') {
         let modified = body;
-        if (targetCid && targetCid !== '0' && modified.includes('cid=0')) {
+        if (hasTargetCid && modified.includes('cid=0')) {
           modified = modified.replace(/([&?]cid=)0(?=[&]|$)/, \`$1\${targetCid}\`);
         }
         if (pwd && (modified.includes('receive_code=&') || modified.endsWith('receive_code='))) {
@@ -2008,7 +2098,7 @@
         return modified;
       }
       if (body instanceof URLSearchParams || body instanceof FormData) {
-        if (targetCid && targetCid !== '0') body.set('cid', targetCid);
+        if (hasTargetCid) body.set('cid', targetCid);
         if (pwd) body.set('receive_code', pwd);
         return body;
       }
@@ -2399,6 +2489,7 @@
 
         const doSearch = async (targetPage = 1) => {
           if (!query.value.keyword.trim()) return;
+          addSearchHistory(query.value.keyword.trim());
           loading.value = true;
           page.value = targetPage;
           
@@ -2914,6 +3005,11 @@
           goUpOneLevel,
           switchToTree,
           doSearch,
+          searchHistory,
+          addSearchHistory,
+          removeSearchHistory,
+          clearSearchHistory,
+          selectHistorySearch,
           toggleExt,
           copyText,
           formatDateTime,

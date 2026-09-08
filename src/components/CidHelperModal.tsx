@@ -35,8 +35,8 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
   const scriptCode = `// ==UserScript==
 // @name         115 分享链接 CID 直达 & 自动免密助手 (增强版)
 // @namespace    https://115.com/
-// @version      1.2.0
-// @description  自动解析 115 分享链接中的提取码并秒级自动免密提交；自动将根目录请求重定向至目标 CID 子目录，告别从根目录逐层手动翻找！
+// @version      1.2.1
+// @description  自动解析 115 分享链接中的提取码并秒级自动免密提交；自动将根目录请求重定向至目标 CID 子目录。当 URL 无 CID 参数时保持纯净普通浏览，不显示任何注入提示框。
 // @author       115 Search Service
 // @match        *://115.com/s/*
 // @match        *://*.115.com/s/*
@@ -74,12 +74,14 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
   }
 
   const { pwd, targetCid } = parseParams();
+  // 当 URL 明确包含有效 CID 时才激活 CID 重定向；无 CID 时为普通 115 浏览，不注入任何提示框
+  const hasTargetCid = Boolean(targetCid && targetCid !== '0');
   let autoSubmitted = false;
 
   function rewriteUrl(url) {
     if (typeof url !== 'string' || !url.includes('/share/snap')) return url;
     let newUrl = url;
-    if (targetCid && targetCid !== '0') {
+    if (hasTargetCid) {
       if (newUrl.includes('cid=0')) {
         newUrl = newUrl.replace(/([?&]cid=)0(?=[&]|$)/, \`$1\${targetCid}\`);
       } else if (!newUrl.includes('cid=')) {
@@ -101,7 +103,7 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
     try {
       if (typeof body === 'string') {
         let modified = body;
-        if (targetCid && targetCid !== '0' && modified.includes('cid=0')) {
+        if (hasTargetCid && modified.includes('cid=0')) {
           modified = modified.replace(/([&?]cid=)0(?=[&]|$)/, \`$1\${targetCid}\`);
         }
         if (pwd && (modified.includes('receive_code=&') || modified.endsWith('receive_code='))) {
@@ -112,7 +114,7 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
         return modified;
       }
       if (body instanceof URLSearchParams || body instanceof FormData) {
-        if (targetCid && targetCid !== '0') body.set('cid', targetCid);
+        if (hasTargetCid) body.set('cid', targetCid);
         if (pwd) body.set('receive_code', pwd);
         return body;
       }
