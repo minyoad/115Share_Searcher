@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ==============================================================================
 # 115 Cloud Drive Share Search Service (115 分享资源搜索服务)
 # 生产环境部署编排文件 (Production Docker Compose)
@@ -88,7 +86,7 @@ services:
   # 3. FastAPI Web REST API (支持多 Worker、生产级反向代理头、健康检查)
   # ----------------------------------------------------------------------------
   api:
-    image: ${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:${IMAGE_TAG:-latest}
+    image: ${DOCKER_IMAGE:-ghcr.io/minyoad/115share_searcher}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -148,7 +146,7 @@ services:
   # 4. Background Crawler Worker (异步队列消费，BFS 遍历与批量入库)
   # ----------------------------------------------------------------------------
   worker:
-    image: ${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:${IMAGE_TAG:-latest}
+    image: ${DOCKER_IMAGE:-ghcr.io/minyoad/115share_searcher}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
