@@ -89,10 +89,10 @@ class Settings(BaseSettings):
         description="Minimum number of healthy available proxies; if available count drops below this, fetch from API on demand"
     )
 
-    # Admin Portal Authorization Settings (管理入口与后台权限)
+    # Admin Portal Authorization Settings (管理密码现由 PostgreSQL system_settings 表持久化管理，不依赖 .env)
     ADMIN_SECRET: str = Field(
         default="admin115",
-        description="Secret key or token required to access administrative portal, task manager, and proxy configs"
+        description="Fallback secret key only used if DB is offline. Primary admin password is now securely persisted in PostgreSQL."
     )
     ADMIN_AUTH_ENABLED: bool = Field(
         default=True,

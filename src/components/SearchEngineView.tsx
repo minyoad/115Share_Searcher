@@ -23,7 +23,9 @@ import {
   X,
   TrendingUp,
   Puzzle,
-  HelpCircle
+  HelpCircle,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { FileRecord, ShareRecord } from '../types';
 import { CidHelperModal } from './CidHelperModal';
@@ -65,6 +67,7 @@ interface SearchEngineViewProps {
   files: FileRecord[];
   onOpenTree: (shareCode: string, targetCid?: string, highlightId?: string) => void;
   onReportShare: (shareCode: string) => void;
+  onDeleteShare?: (shareCode: string) => void;
 }
 
 export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
@@ -72,6 +75,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   files,
   onOpenTree,
   onReportShare,
+  onDeleteShare,
 }) => {
   const [keyword, setKeyword] = useState('');
   const [selectedExt, setSelectedExt] = useState('');
@@ -80,6 +84,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState<number | null>(null);
   const [isCidHelperOpen, setIsCidHelperOpen] = useState(false);
+  const [shareCodeToDelete, setShareCodeToDelete] = useState<{ code: string; title: string } | null>(null);
 
   // Popular / Hot searches states
   const [selectedHotCat, setSelectedHotCat] = useState<'all' | 'movie' | 'tech' | 'music' | 'doc'>('all');
@@ -638,11 +643,21 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
 
                       <button
                         onClick={() => onReportShare(item.share_code)}
-                        className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition min-w-[36px] min-h-[36px] flex items-center justify-center"
+                        className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer"
                         title="上报失效链接"
                       >
                         <Flag className="w-3.5 h-3.5" />
                       </button>
+
+                      {onDeleteShare && (
+                        <button
+                          onClick={() => setShareCodeToDelete({ code: item.share_code, title: item.share_title })}
+                          className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer"
+                          title="彻底移除该分享链接并级联清理名下全部文件"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -691,6 +706,63 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           }
         }}
       />
+
+      {/* Delete Share Confirmation Modal */}
+      {shareCodeToDelete && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setShareCodeToDelete(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-slate-900">彻底移除此分享与关联文件？</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                您即将从搜索数据库中彻底删除分享「<span className="font-bold text-slate-800">{shareCodeToDelete.title || shareCodeToDelete.code}</span>」（代码: <span className="font-mono font-bold text-slate-800">{shareCodeToDelete.code}</span>）。
+              </p>
+            </div>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>级联清理提示</span>
+              </div>
+              <p className="leading-relaxed">
+                此操作将<strong className="text-rose-700 font-bold">同步删除该分享名下的全部文件与目录记录</strong>，防止因分享失效导致搜索结果出现无效死链。
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShareCodeToDelete(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteShare && shareCodeToDelete) {
+                    onDeleteShare(shareCodeToDelete.code);
+                  }
+                  setShareCodeToDelete(null);
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>确认彻底移除</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

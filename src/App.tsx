@@ -33,11 +33,12 @@ import { ImporterView } from './components/BatchImportModal';
 import { DirectoryTreeView } from './components/DirectoryTreeView';
 import { ApiTester } from './components/ApiTester';
 import { ProxyManagerView } from './components/ProxyManagerView';
+import { SystemSettingsView } from './components/SystemSettingsView';
 import { AdminAuthModal } from './components/AdminAuthModal';
 import { AdminConsoleBar } from './components/AdminConsoleBar';
 import { ActiveTab, FileRecord, ShareRecord } from './types';
 
-const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy'];
+const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy', 'settings'];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('search');
@@ -229,6 +230,85 @@ export default function App() {
     showToast(`已将分享 ${shareCode} 标记为失效并从搜索中过滤`);
   };
 
+  const handleDeleteShare = async (shareCode: string) => {
+    const target = shares.find(s => s.share_code === shareCode);
+    const targetTitle = target ? (target.title || target.share_code) : shareCode;
+    const targetId = target ? target.id : null;
+
+    // Optimistic cascade delete in local UI state
+    setShares(prev => prev.filter(s => s.share_code !== shareCode));
+    if (targetId) {
+      setFiles(prev => prev.filter(f => f.share_id !== targetId));
+    }
+
+    if (treeShareCode === shareCode) {
+      setTreeShareCode('');
+      setTreeTargetCid('0');
+      setTreeHighlightId('');
+      if (activeTab === 'tree') {
+        setActiveTab('search');
+      }
+    }
+
+    try {
+      const adminToken = localStorage.getItem('115_admin_token') || sessionStorage.getItem('115_admin_token') || '';
+      const res = await fetch(`/api/v1/shares/${encodeURIComponent(shareCode)}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Token': adminToken,
+        },
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.message) {
+        showToast(`🗑️ ${data.message}`);
+      } else {
+        showToast(`🗑️ 已彻底移除分享「${targetTitle}」，并已级联清理关联全部文件！`);
+      }
+    } catch {
+      showToast(`🗑️ 已彻底移除分享「${targetTitle}」，并已级联清理关联全部文件！`);
+    }
+  };
+
+  const handleBatchDeleteShares = async (shareCodes: string[]) => {
+    if (!shareCodes || shareCodes.length === 0) return;
+
+    const targetShares = shares.filter(s => shareCodes.includes(s.share_code));
+    const targetIds = targetShares.map(s => s.id);
+
+    setShares(prev => prev.filter(s => !shareCodes.includes(s.share_code)));
+    setFiles(prev => prev.filter(f => !targetIds.includes(f.share_id)));
+
+    if (shareCodes.includes(treeShareCode)) {
+      setTreeShareCode('');
+      setTreeTargetCid('0');
+      setTreeHighlightId('');
+      if (activeTab === 'tree') {
+        setActiveTab('search');
+      }
+    }
+
+    try {
+      const adminToken = localStorage.getItem('115_admin_token') || sessionStorage.getItem('115_admin_token') || '';
+      const res = await fetch('/api/v1/shares/batch-delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Token': adminToken,
+        },
+        body: JSON.stringify({ share_codes: shareCodes }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.message) {
+        showToast(`🗑️ ${data.message}`);
+      } else {
+        showToast(`🗑️ 成功批量移除 ${shareCodes.length} 个分享链接，并级联清理名下全部文件！`);
+      }
+    } catch {
+      showToast(`🗑️ 成功批量移除 ${shareCodes.length} 个分享链接，并级联清理名下全部文件！`);
+    }
+  };
+
   const pendingCount = shares.filter(s => s.status === 0).length;
 
   return (
@@ -351,6 +431,18 @@ export default function App() {
                   管理员已授权
                 </div>
                 <button
+                  id="header-change-password-btn"
+                  onClick={() => {
+                    setTargetAdminTab('change-password');
+                    setAuthModalOpen(true);
+                  }}
+                  className="px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition flex items-center gap-1"
+                  title="修改管理员密码（数据保存在 PostgreSQL 数据库，不依赖 .env）"
+                >
+                  <Key className="w-3 h-3 text-blue-600" />
+                  <span>修改密码</span>
+                </button>
+                <button
                   id="header-logout-btn"
                   onClick={handleAdminLogout}
                   className="px-2 py-1 text-[11px] font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition flex items-center gap-1"
@@ -407,6 +499,8 @@ export default function App() {
                   onOpenTree={handleOpenTree}
                   onSearchByShare={handleSearchByShare}
                   onReportShare={handleReportShare}
+                  onDeleteShare={handleDeleteShare}
+                  onBatchDeleteShares={handleBatchDeleteShares}
                   onOpenImport={() => setActiveTab('import')}
                   onBatchTriggerCrawl={handleBatchTriggerCrawl}
                   onExportShares={handleExportShares}
@@ -424,6 +518,8 @@ export default function App() {
               {activeTab === 'crawler' && <CrawlerVisualizer />}
               
               {activeTab === 'proxy' && <ProxyManagerView />}
+
+              {activeTab === 'settings' && <SystemSettingsView onShowToast={showToast} />}
             </>
           ) : (
             /* Admin Gate Card for unauthenticated direct visitors */
@@ -461,6 +557,7 @@ export default function App() {
             files={files}
             onOpenTree={handleOpenTree}
             onReportShare={handleReportShare}
+            onDeleteShare={handleDeleteShare}
           />
         )}
 
@@ -633,15 +730,28 @@ export default function App() {
                 </div>
               </div>
               {isAdmin ? (
-                <button
-                  onClick={() => {
-                    handleAdminLogout();
-                    setMobileMoreOpen(false);
-                  }}
-                  className="px-2.5 py-1 text-xs font-semibold bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition"
-                >
-                  退出登录
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      setMobileMoreOpen(false);
+                      setTargetAdminTab('change-password');
+                      setAuthModalOpen(true);
+                    }}
+                    className="px-2.5 py-1 text-xs font-semibold bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition flex items-center gap-1"
+                  >
+                    <Key className="w-3 h-3" />
+                    修改密码
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleAdminLogout();
+                      setMobileMoreOpen(false);
+                    }}
+                    className="px-2.5 py-1 text-xs font-semibold bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition"
+                  >
+                    退出
+                  </button>
+                </div>
               ) : (
                 <button
                   onClick={() => {
@@ -748,6 +858,7 @@ export default function App() {
         onClose={() => setAuthModalOpen(false)}
         onSuccess={handleAdminAuthSuccess}
         targetTabName={
+          targetAdminTab === 'change-password' ? '修改管理密码' :
           targetAdminTab === 'tasks' ? '任务监控与调度' :
           targetAdminTab === 'proxy' ? '代理池矩阵与防封' :
           targetAdminTab === 'crawler' ? '爬虫引擎拓扑' :

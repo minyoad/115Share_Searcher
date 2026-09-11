@@ -16,7 +16,8 @@ import {
   Check,
   Download,
   CheckSquare,
-  FileJson
+  FileJson,
+  Trash2
 } from 'lucide-react';
 import { ShareRecord } from '../types';
 
@@ -29,6 +30,8 @@ interface ShareTaskManagerProps {
   onOpenImport: () => void;
   onBatchTriggerCrawl?: (shareCodes: string[]) => void;
   onExportShares?: (shareCodes?: string[]) => void;
+  onDeleteShare?: (shareCode: string) => void;
+  onBatchDeleteShares?: (shareCodes: string[]) => void;
 }
 
 export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
@@ -40,6 +43,8 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   onOpenImport,
   onBatchTriggerCrawl,
   onExportShares,
+  onDeleteShare,
+  onBatchDeleteShares,
 }) => {
   const [filterStatus, setFilterStatus] = useState<number | null>(null);
   const [searchKw, setSearchKw] = useState('');
@@ -47,6 +52,8 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   const [selectedShareCodes, setSelectedShareCodes] = useState<string[]>([]);
   const [batchCrawling, setBatchCrawling] = useState(false);
   const [syncingTitles, setSyncingTitles] = useState(false);
+  const [shareToDelete, setShareToDelete] = useState<ShareRecord | null>(null);
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
 
   const handleSyncTitles = async () => {
     try {
@@ -363,6 +370,19 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               <FileJson className="w-3.5 h-3.5 text-slate-500" />
               <span>导出全量</span>
             </button>
+
+            {/* Batch Delete Selected Links & Cascade Files */}
+            {onBatchDeleteShares && (
+              <button 
+                onClick={() => setShowBatchDeleteConfirm(true)}
+                disabled={selectedShareCodes.length === 0}
+                className="flex-1 sm:flex-none justify-center px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px]"
+                title="批量移除选中的分享链接及其名下的全部关联文件"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>批量移除 ({selectedShareCodes.length})</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -506,6 +526,17 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                     >
                       <ExternalLink className="w-4 h-4" />
                     </a>
+
+                    {/* Delete Share and Cascade Remove Files */}
+                    {onDeleteShare && (
+                      <button
+                        onClick={() => setShareToDelete(s)}
+                        className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition min-w-[38px] min-h-[38px] flex items-center justify-center cursor-pointer"
+                        title="彻底移除该分享链接并级联清理名下全部文件，防止失效后继续被搜索出"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -518,6 +549,122 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Single Share Delete Confirmation Modal */}
+      {shareToDelete && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setShareToDelete(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-slate-900">彻底移除分享链接与关联文件？</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                您即将从数据库中彻底删除分享代码为 <span className="font-mono font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded">{shareToDelete.share_code}</span> 的记录。
+              </p>
+            </div>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>级联清理机制说明</span>
+              </div>
+              <p className="leading-relaxed">
+                系统将<strong className="text-rose-700 font-bold">同步删除名下全部已收录的 {shareToDelete.file_count} 个文件与目录记录</strong>，彻底防止该分享失效后脏数据继续在搜索结果中显示。
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShareToDelete(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteShare && shareToDelete) {
+                    onDeleteShare(shareToDelete.share_code);
+                    setSelectedShareCodes(prev => prev.filter(c => c !== shareToDelete.share_code));
+                  }
+                  setShareToDelete(null);
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>确认彻底移除</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Confirmation Modal */}
+      {showBatchDeleteConfirm && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setShowBatchDeleteConfirm(false)}
+        >
+          <div 
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-slate-900">批量彻底移除选中的 {selectedShareCodes.length} 个分享？</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                您已勾选 <span className="font-bold text-slate-800">{selectedShareCodes.length}</span> 个分享链接。
+              </p>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-rose-800">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>强力级联删除提醒</span>
+              </div>
+              <p className="leading-relaxed">
+                执行批量移除后，这些分享链接名下的<strong className="text-rose-700 font-bold">所有目录与文件记录将立即被批量删除</strong>，从搜索索引中永久下架。
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowBatchDeleteConfirm(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onBatchDeleteShares && selectedShareCodes.length > 0) {
+                    onBatchDeleteShares(selectedShareCodes);
+                    setSelectedShareCodes([]);
+                  }
+                  setShowBatchDeleteConfirm(false);
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>确认批量彻底移除</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

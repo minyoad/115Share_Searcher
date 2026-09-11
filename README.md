@@ -152,4 +152,21 @@ CREATE TABLE files (
 -- 倒排 GIN 索引加速全路径模糊搜索
 CREATE INDEX ix_files_full_path_trgm ON files USING gin (full_path gin_trgm_ops);
 CREATE INDEX ix_files_ext_size ON files (extension, size);
+
+-- 系统全量动态配置与管理员凭据持久化存储表 (免 .env 热更新)
+CREATE TABLE IF NOT EXISTS system_settings (
+    key VARCHAR(128) PRIMARY KEY,
+    value TEXT NOT NULL,
+    data_type VARCHAR(32) NOT NULL DEFAULT 'string',
+    category VARCHAR(64) NOT NULL DEFAULT 'general',
+    description VARCHAR(512) NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
 ```
+
+---
+
+## 📖 专项指南与文档
+
+- ⚙️ **[数据库配置与大批量提交说明文档 (DATABASE_CONFIG_AND_BATCH_GUIDE.md)](./DATABASE_CONFIG_AND_BATCH_GUIDE.md)**：包含全配置项移至 PostgreSQL、热重载 API 规范、大批量链接分批切片（每批 150 条，上限 10,000 条）引擎及零 `.env` 部署详细指南。
+

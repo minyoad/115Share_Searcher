@@ -109,8 +109,12 @@ class ShareImportItem(BaseModel):
 
 
 class BatchImportRequest(BaseModel):
-    """批量导入分享链接请求"""
-    shares: List[ShareImportItem] = Field(..., min_length=1, max_length=200, description="分享列表")
+    """
+    批量导入分享链接请求
+    解除旧版 200 条限制，支持高达 10,000 条链接单次/多批次提交，
+    后端将采用分批流式事务与入队，确保极高吞吐与防超时崩溃。
+    """
+    shares: List[ShareImportItem] = Field(..., min_length=1, max_length=10000, description="分享列表（支持数千至上万条，后端自动分批优化处理）")
     force_crawl: bool = Field(default=True, description="是否强制重新触发爬取（若已存在或未完成则再次入队）")
 
 
@@ -119,6 +123,8 @@ class BatchImportTaskResult(BaseModel):
     total_submitted: int
     tasks_queued: int
     ignored_duplicates: int
+    failed_count: int = 0
+    batches_processed: int = 1
     task_ids: List[str]
     message: str
 
@@ -335,12 +341,83 @@ class AdminVerifyResponse(BaseModel):
     authenticated: bool
     message: str
     token: Optional[str] = None
+    is_initialized: bool = Field(default=True, description="是否已设置个性化管理密码")
 
 
 class AdminStatusResponse(BaseModel):
     """管理员入口状态"""
     auth_enabled: bool
     authenticated: bool
+    is_initialized: bool = Field(default=True, description="是否已设置个性化管理密码")
     message: str
+
+
+class AdminInitPasswordRequest(BaseModel):
+    """首次配置管理员密码请求 (免 .env)"""
+    new_password: str = Field(min_length=4, max_length=64, description="新管理密码 (至少4位)")
+
+
+class AdminChangePasswordRequest(BaseModel):
+    """修改管理员密码请求 (数据库持久化)"""
+    old_password: str = Field(description="当前原管理密码")
+    new_password: str = Field(min_length=4, max_length=64, description="新管理密码 (至少4位)")
+
+
+class SystemSettingItemSchema(BaseModel):
+    """单条系统配置项元数据与当前值"""
+    key: str
+    title: str
+    description: str
+    type: str
+    category: str
+    default: Any
+    current: Any
+    is_modified: bool
+    sensitive: bool = False
+
+
+class SystemSettingCategorySchema(BaseModel):
+    """按模块分类的配置项分组"""
+    id: str
+    name: str
+    items: List[SystemSettingItemSchema]
+
+
+class SystemSettingsGroupResponse(BaseModel):
+    """系统全量动态配置响应"""
+    categories: List[SystemSettingCategorySchema]
+    total_count: int
+
+
+class SystemSettingsUpdateRequest(BaseModel):
+    """批量更新系统配置项请求 (存入 PostgreSQL 数据库)"""
+    settings: Dict[str, Any] = Field(..., description="键值对字典，例如 {'CRAWLER_CONCURRENCY': 20, 'CRAWLER_COOKIE': '...'}")
+
+
+class SystemSettingsResetRequest(BaseModel):
+    """恢复配置项为默认值请求"""
+    keys: Optional[List[str]] = Field(default=None, description="指定恢复默认值的键列表；留空则全量恢复")
+
+
+class DeleteShareResponse(BaseModel):
+    """彻底删除单个分享响应"""
+    status: str = "success"
+    share_code: str
+    deleted_files: int
+    message: str
+
+
+class BatchDeleteSharesRequest(BaseModel):
+    """批量移除分享链接及名下文件请求"""
+    share_codes: List[str] = Field(..., min_length=1, description="待彻底移除的分享代码列表")
+
+
+class BatchDeleteSharesResponse(BaseModel):
+    """批量移除分享链接及名下文件响应"""
+    status: str = "success"
+    deleted_shares: int
+    deleted_files: int
+    message: str
+
 
 

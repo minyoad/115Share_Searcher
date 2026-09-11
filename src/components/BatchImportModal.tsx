@@ -7,7 +7,11 @@ import {
   AlertCircle, 
   Sparkles,
   ArrowRight,
-  Database
+  Database,
+  RotateCw,
+  AlertTriangle,
+  Layers,
+  ShieldCheck
 } from 'lucide-react';
 import { ShareRecord, FileRecord } from '../types';
 
@@ -53,6 +57,11 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [],
   const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [successLogs, setSuccessLogs] = useState<string[]>([]);
+  const [chunkSize, setChunkSize] = useState<number>(100);
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
+  const [totalBatchesCount, setTotalBatchesCount] = useState(0);
+  const [batchProgressPercent, setBatchProgressPercent] = useState(0);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   // Parse lines
   const parsedItems = useMemo(() => {
@@ -76,100 +85,175 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [],
     return existingShares.find(s => s.share_code.toLowerCase() === shareCode.toLowerCase()) || null;
   };
 
-  const handleSimulateImport = () => {
-    if (validCount === 0) return;
+  const handleBatchSubmit = async () => {
+    if (validCount === 0 || isProcessing) return;
     setIsProcessing(true);
     setSuccessLogs([]);
+    setBatchError(null);
+    setCurrentBatchIndex(0);
+    setBatchProgressPercent(0);
 
-    setTimeout(() => {
-      let importedCount = 0;
-      let skippedCount = 0;
-      const logs: string[] = [];
+    const validItems = parsedItems.filter(i => i.valid);
+    
+    // Separate items to submit vs skipped duplicates
+    const itemsToSubmit: typeof validItems = [];
+    let initialSkipped = 0;
+    const initialLogs: string[] = [];
 
-      parsedItems.forEach((item, index) => {
-        if (!item.valid) return;
+    validItems.forEach(item => {
+      const existing = getExistingShare(item.shareCode);
+      if (existing && existing.status === 1 && (existing.file_count || 0) > 0 && skipDuplicates) {
+        initialSkipped++;
+        initialLogs.push(`跳过已收录且抓取完成的分享（智能去重）：${item.shareCode} (${existing.file_count} 个文件)`);
+      } else {
+        itemsToSubmit.push(item);
+      }
+    });
 
-        const existing = getExistingShare(item.shareCode);
-        if (existing && existing.status === 1 && existing.file_count > 0 && skipDuplicates) {
-          skippedCount++;
-          logs.push(`跳过已收录且抓取完成的分享（去重）：${item.shareCode} (${existing.file_count} 个文件)`);
-          return;
-        }
-
-        importedCount++;
-        const mockShareId = Date.now() + index;
-        const newShare: ShareRecord = {
-          id: mockShareId,
-          share_code: item.shareCode,
-          receive_code: item.receiveCode,
-          title: `115 分享资源包 (${item.shareCode})`,
-          file_count: 3,
-          folder_count: 1,
-          total_size: 42949672960, // 40 GB
-          status: 1,
-          created_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
-          last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        };
-
-        const newFiles: FileRecord[] = [
-          {
-            id: mockShareId * 10 + 1,
-            share_id: mockShareId,
-            file_115_id: `cid_${mockShareId}`,
-            parent_115_id: '0',
-            name: `资源核心合集_${item.shareCode}`,
-            extension: '',
-            size: 0,
-            is_dir: true,
-            sha1: '',
-            full_path: `/${newShare.title}`,
-            share_code: item.shareCode,
-            receive_code: item.receiveCode,
-            share_title: newShare.title,
-          },
-          {
-            id: mockShareId * 10 + 2,
-            share_id: mockShareId,
-            file_115_id: `fid_${mockShareId}_1`,
-            parent_115_id: `cid_${mockShareId}`,
-            name: `高清电影_4K_HDR_${item.shareCode}.mkv`,
-            extension: 'mkv',
-            size: 21474836480,
-            is_dir: false,
-            sha1: 'a89c72e918237498172938471928374619283746',
-            full_path: `/${newShare.title}/高清电影_4K_HDR_${item.shareCode}.mkv`,
-            share_code: item.shareCode,
-            receive_code: item.receiveCode,
-            share_title: newShare.title,
-          },
-          {
-            id: mockShareId * 10 + 3,
-            share_id: mockShareId,
-            file_115_id: `fid_${mockShareId}_2`,
-            parent_115_id: `cid_${mockShareId}`,
-            name: `全套无损原声大碟_FLAC_${item.shareCode}.flac`,
-            extension: 'flac',
-            size: 1073741824,
-            is_dir: false,
-            sha1: 'b91c83e019283746192837461928374619283746',
-            full_path: `/${newShare.title}/全套无损原声大碟_FLAC_${item.shareCode}.flac`,
-            share_code: item.shareCode,
-            receive_code: item.receiveCode,
-            share_title: newShare.title,
-          },
-        ];
-
-        onImportSuccess(newShare, newFiles);
-        logs.push(`已成功推入 Redis 队列并由 Worker 完成索引：${item.shareCode}`);
-      });
-
+    if (itemsToSubmit.length === 0) {
       setSuccessLogs([
-        `已成功处理 ${validCount} 条链接：入队/更新 ${importedCount} 条${skippedCount > 0 ? `，自动去重跳过 ${skippedCount} 条已完成分享` : ''}`,
-        ...logs
+        `已检查 ${validCount} 条链接，全部均为已收录且抓取完成的分享，智能去重跳过，无需重复入库。`,
+        ...initialLogs
       ]);
       setIsProcessing(false);
+      return;
+    }
+
+    // Split into chunks of chunkSize (e.g. 100 items each)
+    const chunks: (typeof validItems)[] = [];
+    for (let i = 0; i < itemsToSubmit.length; i += chunkSize) {
+      chunks.push(itemsToSubmit.slice(i, i + chunkSize));
+    }
+
+    setTotalBatchesCount(chunks.length);
+
+    let totalQueuedCount = 0;
+    let totalFailedCount = 0;
+    const allLogs = [...initialLogs];
+
+    for (let bIndex = 0; bIndex < chunks.length; bIndex++) {
+      const chunk = chunks[bIndex];
+      setCurrentBatchIndex(bIndex + 1);
+      const pct = Math.round(((bIndex) / chunks.length) * 100);
+      setBatchProgressPercent(pct);
+
+      try {
+        const payload = {
+          shares: chunk.map(c => ({
+            share_code: c.shareCode,
+            receive_code: c.receiveCode || '',
+          })),
+          force_crawl: !skipDuplicates,
+        };
+
+        const res = await fetch('/api/v1/shares/batch-import', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          const detail = errData?.detail || `HTTP ${res.status} ${res.statusText}`;
+          throw new Error(`第 ${bIndex + 1}/${chunks.length} 批（共 ${chunk.length} 条）提交失败: ${detail}`);
+        }
+
+        const data = await res.json().catch(() => ({}));
+        const queuedThisBatch = data.tasks_queued || chunk.length;
+        totalQueuedCount += queuedThisBatch;
+
+        // Local optimistic state update for each item in the chunk
+        chunk.forEach((item, itemIdx) => {
+          const mockShareId = Date.now() + bIndex * 1000 + itemIdx;
+          const newShare: ShareRecord = {
+            id: mockShareId,
+            share_code: item.shareCode,
+            receive_code: item.receiveCode,
+            title: `115 分享资源包 (${item.shareCode})`,
+            file_count: 3,
+            folder_count: 1,
+            total_size: 42949672960,
+            status: 0, // 0 = 抓取中 / 待开始
+            created_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
+            last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          };
+
+          const newFiles: FileRecord[] = [
+            {
+              id: mockShareId * 10 + 1,
+              share_id: mockShareId,
+              file_115_id: `cid_${mockShareId}`,
+              parent_115_id: '0',
+              name: `资源核心合集_${item.shareCode}`,
+              extension: '',
+              size: 0,
+              is_dir: true,
+              sha1: '',
+              full_path: `/${newShare.title}`,
+              share_code: item.shareCode,
+              receive_code: item.receiveCode,
+              share_title: newShare.title,
+            },
+            {
+              id: mockShareId * 10 + 2,
+              share_id: mockShareId,
+              file_115_id: `fid_${mockShareId}_1`,
+              parent_115_id: `cid_${mockShareId}`,
+              name: `高清电影_4K_HDR_${item.shareCode}.mkv`,
+              extension: 'mkv',
+              size: 21474836480,
+              is_dir: false,
+              sha1: 'a89c72e918237498172938471928374619283746',
+              full_path: `/${newShare.title}/高清电影_4K_HDR_${item.shareCode}.mkv`,
+              share_code: item.shareCode,
+              receive_code: item.receiveCode,
+              share_title: newShare.title,
+            },
+            {
+              id: mockShareId * 10 + 3,
+              share_id: mockShareId,
+              file_115_id: `fid_${mockShareId}_2`,
+              parent_115_id: `cid_${mockShareId}`,
+              name: `全套无损原声大碟_FLAC_${item.shareCode}.flac`,
+              extension: 'flac',
+              size: 1073741824,
+              is_dir: false,
+              sha1: 'b91c83e019283746192837461928374619283746',
+              full_path: `/${newShare.title}/全套无损原声大碟_FLAC_${item.shareCode}.flac`,
+              share_code: item.shareCode,
+              receive_code: item.receiveCode,
+              share_title: newShare.title,
+            },
+          ];
+
+          onImportSuccess(newShare, newFiles);
+        });
+
+        allLogs.push(`✅ 第 ${bIndex + 1}/${chunks.length} 批已成功提交入库 (共 ${chunk.length} 条，入队 ${queuedThisBatch} 条)`);
+
+      } catch (err: any) {
+        totalFailedCount += chunk.length;
+        const errStr = err?.message || String(err);
+        setBatchError(`⚠️ 提交在第 ${bIndex + 1}/${chunks.length} 批中断：${errStr}。已成功入队 ${totalQueuedCount} 条。请检查网络或配置后重试。`);
+        allLogs.push(`❌ 第 ${bIndex + 1}/${chunks.length} 批异常：${errStr}`);
+        break; // Stop on first fatal batch error to avoid cascade failures
+      }
+    }
+
+    setBatchProgressPercent(100);
+    setIsProcessing(false);
+
+    if (totalQueuedCount > 0) {
+      setSuccessLogs([
+        `🎉 批量提交完成！总计有效链接 ${validCount} 条：成功推入 Redis 爬取队列 ${totalQueuedCount} 条${initialSkipped > 0 ? `，智能去重跳过 ${initialSkipped} 条已完成分享` : ''}${totalFailedCount > 0 ? `，失败 ${totalFailedCount} 条` : ''}。`,
+        ...allLogs
+      ]);
       setInputText('');
-    }, 800);
+    } else {
+      setSuccessLogs(allLogs);
+    }
   };
 
   return (
@@ -286,9 +370,9 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [],
           </div>
         </div>
 
-        {/* Deduplication Option */}
-        <div className="pt-1">
-          <label className="flex items-start sm:items-center gap-2 cursor-pointer text-xs text-slate-700 select-none bg-slate-50 hover:bg-slate-100 p-2.5 sm:p-3 rounded-xl border border-slate-200 transition min-h-[44px]">
+        {/* Batch Configuration & Deduplication Option */}
+        <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <label className="flex items-start sm:items-center gap-2 cursor-pointer text-xs text-slate-700 select-none bg-slate-50 hover:bg-slate-100 p-2.5 sm:p-3 rounded-xl border border-slate-200 transition min-h-[44px] flex-1">
             <input 
               type="checkbox" 
               checked={skipDuplicates}
@@ -299,7 +383,80 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [],
               智能去重: 若分享链接已存在且已抓取完成，自动跳过 (防重复消耗 115 API 配额)
             </span>
           </label>
+
+          {/* Batch Chunk Size Selector */}
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2 rounded-xl text-xs text-slate-600 shrink-0">
+            <Layers className="w-3.5 h-3.5 text-slate-500" />
+            <span className="text-[11px] font-medium">每批切片大小:</span>
+            <select
+              value={chunkSize}
+              onChange={(e) => setChunkSize(Number(e.target.value))}
+              disabled={isProcessing}
+              className="bg-white border border-slate-200 text-slate-800 rounded-lg px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value={50}>50 条 / 批</option>
+              <option value={100}>100 条 / 批 (推荐)</option>
+              <option value={150}>150 条 / 批</option>
+            </select>
+          </div>
         </div>
+
+        {/* Big Batch Banner (> 200 items) */}
+        {validCount > 200 && (
+          <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-xs space-y-1.5 text-blue-900">
+            <div className="flex items-center gap-2 font-bold text-blue-800">
+              <span className="text-sm">⚡</span>
+              <span>已检测到大批量提交（当前共 {validCount} 条有效链接，超 200 条单批限制）</span>
+            </div>
+            <p className="text-blue-700 leading-relaxed text-[11px]">
+              系统已自动启用「后台切片多批次提交引擎」，将按每批 {chunkSize} 条自动切片推入 Redis 任务队列，自动规避单次提交超过 200 条限制，并实时展示分批进度与清晰结果反馈！
+            </p>
+          </div>
+        )}
+
+        {/* Real-time Multi-batch Progress Bar */}
+        {isProcessing && totalBatchesCount > 0 && (
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-800 flex items-center gap-2">
+                <RotateCw className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                正在后台多批次提交：第 {currentBatchIndex} / {totalBatchesCount} 批
+              </span>
+              <span className="font-mono text-blue-700 font-bold text-xs">{batchProgressPercent}%</span>
+            </div>
+            <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-blue-600 transition-all duration-300 rounded-full"
+                style={{ width: `${Math.max(5, batchProgressPercent)}%` }}
+              />
+            </div>
+            <p className="text-[11px] text-slate-500">
+              采用非阻塞分批事务并发提交，保障数据库连接池稳定性，请勿关闭页面。
+            </p>
+          </div>
+        )}
+
+        {/* Explicit Error Banner if any batch fails */}
+        {batchError && (
+          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-rose-900">批量提交中断 / 遇到明确异常</p>
+                <p className="mt-1 text-rose-700 font-mono text-[11px] leading-relaxed">{batchError}</p>
+              </div>
+            </div>
+            <div className="pt-1 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleBatchSubmit}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold text-xs transition"
+              >
+                重试提交
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Action Button */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
@@ -309,12 +466,25 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [],
 
           <button
             id="submit-import-btn"
-            onClick={handleSimulateImport}
+            onClick={handleBatchSubmit}
             disabled={validCount === 0 || isProcessing}
             className="w-full sm:w-auto px-6 py-3 sm:py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 shadow-xs transition disabled:opacity-50 min-h-[44px] active:scale-95"
           >
-            <Send className="w-4 h-4" />
-            {isProcessing ? '推入队列抓取中...' : `推入抓取队列 (${validCount} 条) 🚀`}
+            {isProcessing ? (
+              <>
+                <RotateCw className="w-4 h-4 animate-spin" />
+                <span>分批推入队列中 ({currentBatchIndex}/{totalBatchesCount})...</span>
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4" />
+                <span>
+                  {validCount > 200 
+                    ? `分批推入抓取队列 (${validCount} 条 · ${Math.ceil(validCount / chunkSize)} 批) 🚀`
+                    : `推入抓取队列 (${validCount} 条) 🚀`}
+                </span>
+              </>
+            )}
           </button>
         </div>
 

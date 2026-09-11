@@ -71,5 +71,28 @@ export interface ProxySystemStatus {
   crawler_rate_max?: number;
 }
 
-export type ActiveTab = 'search' | 'tasks' | 'code' | 'crawler' | 'proxy' | 'import' | 'tree' | 'api';
+export type ActiveTab = 'search' | 'tasks' | 'code' | 'crawler' | 'proxy' | 'import' | 'tree' | 'api' | 'settings';
+
+export interface SystemSettingItem {
+  key: string;
+  title: string;
+  description: string;
+  type: string;
+  category: string;
+  default: any;
+  current: any;
+  is_modified: boolean;
+  sensitive: boolean;
+}
+
+export interface SystemSettingCategory {
+  id: string;
+  name: string;
+  items: SystemSettingItem[];
+}
+
+export interface SystemSettingsGroup {
+  categories: SystemSettingCategory[];
+  total_count: number;
+}
 

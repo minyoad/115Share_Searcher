@@ -68,6 +68,14 @@
           </button>
 
           <button 
+            @click="switchToSettings()"
+            :class="activeTab === 'settings' ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
+            class="px-3.5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
+          >
+            ⚙️ 系统配置
+          </button>
+
+          <button 
             @click="activeTab = 'import'"
             :class="activeTab === 'import' ? 'bg-blue-600 text-white shadow-sm' : 'bg-white text-slate-700 hover:bg-slate-100'"
             class="px-3.5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5"
@@ -101,6 +109,13 @@
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
             已授权
           </span>
+          <button 
+            @click="openChangePasswordModal"
+            class="px-2 py-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition"
+            title="修改管理密码（保存在数据库中，免.env）"
+          >
+            修改密码
+          </button>
           <button 
             @click="logoutAdmin"
             class="px-2 py-1 text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
@@ -1127,6 +1142,36 @@
           </label>
         </div>
 
+        <!-- Big Batch Notice (> 200 items) -->
+        <div v-if="parsedPreviewList.length > 200" class="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-xs space-y-1.5 text-blue-900">
+          <div class="flex items-center gap-2 font-bold text-blue-800">
+            <span class="text-sm">⚡</span>
+            <span>已启用大批量智能分批提交引擎（当前共 {{ parsedPreviewList.length }} 条链接，超 200 条限制）</span>
+          </div>
+          <p class="text-blue-700 leading-relaxed">
+            系统已全面解除 200 条单次提交限制，自动启用「高并发批次切片引擎（每批 150 条）」。提交后前端将平滑连续入队，并带有实时进度条，杜绝数据库锁争用与网关超时中断，支持数千至上万条链接稳定导入！
+          </p>
+        </div>
+
+        <!-- Import Progress Bar -->
+        <div v-if="importLoading && importBatchTotal > 1" class="space-y-2 bg-slate-50 p-4 rounded-xl border border-blue-200">
+          <div class="flex items-center justify-between text-xs font-semibold text-blue-800">
+            <span class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-blue-600 animate-ping"></span>
+              {{ importProgressText || '正在后台分批提交中...' }}
+            </span>
+            <span class="font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full text-[11px]">
+              {{ Math.round((importBatchCurrent / importBatchTotal) * 100) }}% ({{ importBatchCurrent }}/{{ importBatchTotal }} 批)
+            </span>
+          </div>
+          <div class="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+            <div 
+              class="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+              :style="{ width: `${Math.round((importBatchCurrent / importBatchTotal) * 100)}%` }"
+            ></div>
+          </div>
+        </div>
+
         <div class="flex items-center justify-between pt-2">
           <span class="text-xs text-slate-400">
             {{ importSkipDuplicates ? '去重模式开启：已抓取完成的任务将自动跳过，仅入队新链接或未完成任务' : '强制模式：全部链接推入队列并以断点续传方式更新' }}
@@ -1136,7 +1181,9 @@
             :disabled="importLoading || parsedPreviewList.length === 0"
             class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition shadow-sm disabled:opacity-50 text-xs flex items-center gap-1.5"
           >
-            <span v-if="importLoading">提交入队中...</span>
+            <span v-if="importLoading">
+              {{ importBatchTotal > 1 ? `分批入队中 (${importBatchCurrent}/${importBatchTotal})...` : '提交入队中...' }}
+            </span>
             <span v-else>推入抓取队列 🚀</span>
           </button>
         </div>
@@ -1147,8 +1194,14 @@
         <div class="flex items-center gap-4 text-emerald-700 flex-wrap font-medium">
           <span>提交总数: <strong>{{ importResult.total_submitted }}</strong></span>
           <span>已入队/更新: <strong>{{ importResult.tasks_queued }}</strong></span>
+          <span v-if="importResult.batches_processed && importResult.batches_processed > 1" class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200 font-semibold">
+            分批批次: {{ importResult.batches_processed }}
+          </span>
           <span v-if="importResult.ignored_duplicates > 0" class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200 font-semibold">
             已存在且跳过去重: {{ importResult.ignored_duplicates }}
+          </span>
+          <span v-if="importResult.failed_count && importResult.failed_count > 0" class="bg-rose-100 text-rose-800 px-2 py-0.5 rounded border border-rose-200 font-semibold">
+            入队异常: {{ importResult.failed_count }}
           </span>
         </div>
         <button 
@@ -1582,21 +1635,231 @@
       </div>
     </section>
 
+    <!-- TAB 6: System & Crawler Dynamic Settings in PostgreSQL (Admin Protected) -->
+    <section v-if="activeTab === 'settings' && isAdmin" class="space-y-6">
+      <!-- Top Overview Banner -->
+      <div class="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-6 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4 border border-slate-700/50">
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="px-2.5 py-1 rounded-md text-xs font-semibold uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-400/30">
+              ⚙️ 全配置项数据库持久化管理
+            </span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              免 .env 零配置部署
+            </span>
+          </div>
+          <h2 class="text-xl font-bold tracking-tight">系统与爬虫参数集中管理中心</h2>
+          <p class="text-xs text-slate-300 max-w-2xl leading-relaxed">
+            所有系统配置（VIP Cookie、爬虫频控、任务看门狗、代理池矩阵、管理安全等）已全面保存在 PostgreSQL <code class="bg-slate-800 px-1 py-0.5 rounded text-blue-300 font-mono">system_settings</code> 数据库表中。
+            在此修改后即刻内存热生效，重启容器不受影响，彻底告别手动编辑 <code class="bg-slate-800 px-1 py-0.5 rounded text-amber-300 font-mono">.env</code> 文件的繁琐操作！
+          </p>
+        </div>
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <button 
+            @click="fetchSystemSettings"
+            :disabled="settingsLoading"
+            class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition border border-slate-700 flex items-center gap-1.5"
+            title="从数据库拉取最新数据"
+          >
+            <span v-if="settingsLoading">加载中...</span>
+            <span v-else>🔄 重新载入</span>
+          </button>
+          <button 
+            @click="resetSystemSettings(null)"
+            :disabled="settingsResetting"
+            class="px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-xl text-xs font-semibold transition border border-rose-800/40 flex items-center gap-1.5"
+            title="将全部参数恢复出厂默认值"
+          >
+            <span v-if="settingsResetting">恢复中...</span>
+            <span v-else>⚠️ 恢复默认</span>
+          </button>
+          <button 
+            @click="saveSystemSettings"
+            :disabled="settingsSaving"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <span v-if="settingsSaving">正在写入数据库...</span>
+            <span v-else>💾 保存并热生效</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Category Filter Tabs -->
+      <div class="flex items-center gap-2 border-b border-slate-200 pb-3 overflow-x-auto text-xs font-medium">
+        <button 
+          @click="activeSettingsCategory = 'all'"
+          :class="activeSettingsCategory === 'all' ? 'bg-slate-900 text-white font-bold' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-2 rounded-xl transition whitespace-nowrap"
+        >
+          全部配置项
+        </button>
+        <button 
+          v-for="cat in systemSettingsCategories" 
+          :key="cat.id"
+          @click="activeSettingsCategory = cat.id"
+          :class="activeSettingsCategory === cat.id ? 'bg-slate-900 text-white font-bold' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+          class="px-3.5 py-2 rounded-xl transition whitespace-nowrap flex items-center gap-1.5"
+        >
+          <span>{{ cat.name }}</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-200/60 text-slate-600 font-mono">{{ cat.items.length }}</span>
+        </button>
+      </div>
+
+      <!-- Settings Cards Grid -->
+      <div v-if="settingsLoading" class="p-12 text-center text-slate-400 text-xs">
+        正在从 PostgreSQL 读取系统全量配置...
+      </div>
+      <div v-else class="space-y-6">
+        <div 
+          v-for="cat in systemSettingsCategories.filter(c => activeSettingsCategory === 'all' || activeSettingsCategory === c.id)"
+          :key="cat.id"
+          class="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-4"
+        >
+          <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <span>{{ cat.name }}</span>
+                <span class="text-[11px] font-normal text-slate-400">({{ cat.items.length }} 项)</span>
+              </h3>
+            </div>
+            <button 
+              @click="resetSystemSettings(cat.items.map(i => i.key))"
+              class="text-[11px] text-slate-500 hover:text-rose-600 transition"
+              title="重置本分组项为默认值"
+            >
+              重置本组默认
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div 
+              v-for="item in cat.items" 
+              :key="item.key"
+              class="p-4 rounded-xl border transition space-y-2.5"
+              :class="item.is_modified ? 'bg-amber-50/40 border-amber-200' : 'bg-slate-50/50 border-slate-200/80'"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-bold text-xs text-slate-800">{{ item.title }}</span>
+                    <span v-if="item.is_modified" class="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-semibold border border-amber-200">
+                      已修改
+                    </span>
+                    <span v-if="item.sensitive" class="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-700 font-semibold border border-purple-200">
+                      敏感凭证
+                    </span>
+                  </div>
+                  <code class="text-[11px] font-mono text-blue-700 block mt-0.5">{{ item.key }}</code>
+                </div>
+              </div>
+
+              <p class="text-[11px] text-slate-500 leading-relaxed">{{ item.description }}</p>
+
+              <!-- Field Input based on Type -->
+              <div class="pt-1">
+                <!-- Boolean Switch -->
+                <div v-if="item.type === 'bool'" class="flex items-center gap-3">
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      v-model="systemSettingsMap[item.key]"
+                      class="sr-only peer"
+                    />
+                    <div class="w-10 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                  <span class="text-xs font-semibold" :class="systemSettingsMap[item.key] ? 'text-blue-700' : 'text-slate-500'">
+                    {{ systemSettingsMap[item.key] ? '已启用 (True)' : '已禁用 (False)' }}
+                  </span>
+                </div>
+
+                <!-- Number Input -->
+                <div v-else-if="item.type === 'int' || item.type === 'float'" class="space-y-1">
+                  <input 
+                    type="number"
+                    :step="item.type === 'float' ? '0.01' : '1'"
+                    v-model.number="systemSettingsMap[item.key]"
+                    class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <!-- String Input (Long for Cookie/Headers/UA, or Normal) -->
+                <div v-else class="space-y-1">
+                  <textarea 
+                    v-if="item.key.includes('COOKIE') || item.key.includes('USER_AGENT') || item.key.includes('PROXIES')"
+                    rows="2"
+                    v-model="systemSettingsMap[item.key]"
+                    class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    :placeholder="item.default ? String(item.default) : '无默认值'"
+                  ></textarea>
+                  <input 
+                    v-else
+                    :type="item.sensitive ? 'password' : 'text'"
+                    v-model="systemSettingsMap[item.key]"
+                    class="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    :placeholder="item.default ? String(item.default) : '无默认值'"
+                  />
+                </div>
+              </div>
+
+              <!-- Default Value Info -->
+              <div class="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-200/60 font-mono">
+                <span>出厂预设: {{ item.default === '' ? '（空）' : String(item.default) }}</span>
+                <button 
+                  @click="systemSettingsMap[item.key] = item.default" 
+                  class="text-blue-600 hover:underline font-sans"
+                  title="填入系统默认预设值"
+                >
+                  填入预设
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sticky Save Action Bar -->
+        <div class="p-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div class="text-xs text-slate-600">
+            💡 配置保存后将自动同步并持久化存储在 PostgreSQL <strong class="text-slate-800">system_settings</strong> 表中，无需重启服务。
+          </div>
+          <div class="flex items-center gap-3">
+            <button 
+              @click="fetchSystemSettings"
+              class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition"
+            >
+              取消修改
+            </button>
+            <button 
+              @click="saveSystemSettings"
+              :disabled="settingsSaving"
+              class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+            >
+              <span v-if="settingsSaving">正在写入数据库...</span>
+              <span v-else>保存全部修改至数据库 💾</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Admin Authentication Modal Dialog -->
     <div 
       v-if="showAdminModal" 
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs transition-opacity"
       @click.self="showAdminModal = false"
     >
-      <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+      <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2.5">
             <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-lg border border-blue-100">
-              🔐
+              {{ adminAuthMode === 'change' ? '⚙️' : '🔐' }}
             </div>
             <div>
-              <h3 class="text-base font-bold text-slate-900">管理员身份授权</h3>
-              <p class="text-xs text-slate-500">验证密钥口令以解锁任务监控与代理配置</p>
+              <h3 class="text-base font-bold text-slate-900">
+                {{ adminAuthMode === 'change' ? '修改管理员密码' : '管理员身份授权' }}
+              </h3>
+              <p class="text-xs text-slate-500">
+                {{ adminAuthMode === 'change' ? '数据表级持久化存储，免配 .env' : '验证密码口令以解锁任务监控与代理配置' }}
+              </p>
             </div>
           </div>
           <button 
@@ -1607,10 +1870,29 @@
           </button>
         </div>
 
-        <form @submit.prevent="submitAdminAuth" class="space-y-4">
+        <!-- Mode Switcher -->
+        <div class="flex border-b border-slate-100 bg-slate-50/80 px-2 pt-1 gap-1 text-xs rounded-lg">
+          <button
+            type="button"
+            @click="adminAuthMode = 'login'; adminAuthError = ''; adminAuthSuccess = ''"
+            :class="adminAuthMode === 'login' ? 'border-b-2 border-blue-600 text-blue-600 font-bold bg-white rounded-t-md px-3 py-1.5' : 'text-slate-500 hover:text-slate-800 px-3 py-1.5'"
+          >
+            口令登录
+          </button>
+          <button
+            type="button"
+            @click="adminAuthMode = 'change'; adminAuthError = ''; adminAuthSuccess = ''"
+            :class="adminAuthMode === 'change' ? 'border-b-2 border-blue-600 text-blue-600 font-bold bg-white rounded-t-md px-3 py-1.5' : 'text-slate-500 hover:text-slate-800 px-3 py-1.5'"
+          >
+            修改密码
+          </button>
+        </div>
+
+        <!-- Mode 1: Login -->
+        <form v-if="adminAuthMode === 'login'" @submit.prevent="submitAdminAuth" class="space-y-4">
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center justify-between">
-              <span>管理员密钥口令 (ADMIN_SECRET)</span>
+              <span>管理员密码口令</span>
               <button 
                 type="button" 
                 @click="fillDefaultAdminToken"
@@ -1622,7 +1904,7 @@
             <input 
               v-model="adminTokenInput" 
               type="password" 
-              placeholder="请输入 ADMIN_SECRET 口令..."
+              placeholder="请输入管理密码 (默认 admin115)..."
               required
               autofocus
               class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
@@ -1648,9 +1930,16 @@
               />
               <span>保持授权凭证状态</span>
             </label>
+            <button 
+              type="button" 
+              @click="adminAuthMode = 'change'; adminAuthError = ''; adminAuthSuccess = ''"
+              class="text-blue-600 hover:underline cursor-pointer"
+            >
+              修改密码？
+            </button>
           </div>
 
-          <div class="flex items-center gap-2.5 pt-2">
+          <div class="flex items-center gap-2.5 pt-1">
             <button 
               type="button" 
               @click="showAdminModal = false"
@@ -1668,6 +1957,88 @@
             </button>
           </div>
         </form>
+
+        <!-- Mode 2: Change Password -->
+        <form v-else @submit.prevent="submitChangePassword" class="space-y-3.5">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              当前原管理密码
+            </label>
+            <input 
+              v-model="adminOldPassword" 
+              type="password" 
+              placeholder="请输入当前的原密码 (初始默认 admin115)..."
+              required
+              class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
+            />
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              新管理密码 (至少 4 位)
+            </label>
+            <input 
+              v-model="adminNewPassword" 
+              type="password" 
+              placeholder="请输入新的管理密码..."
+              required
+              class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
+            />
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              确认新密码
+            </label>
+            <input 
+              v-model="adminConfirmPassword" 
+              type="password" 
+              placeholder="请再次输入新密码确认..."
+              required
+              class="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
+            />
+          </div>
+
+          <div v-if="adminAuthError" class="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{{ adminAuthError }}</span>
+          </div>
+
+          <div v-if="adminAuthSuccess" class="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2">
+            <span>✅</span>
+            <span>{{ adminAuthSuccess }}</span>
+          </div>
+
+          <div class="flex items-center gap-2.5 pt-1">
+            <button 
+              type="button" 
+              @click="adminAuthMode = 'login'"
+              class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition cursor-pointer"
+            >
+              返回登录
+            </button>
+            <button 
+              type="submit" 
+              :disabled="adminAuthLoading || !adminNewPassword.trim()"
+              class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-xs transition shadow-sm disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span v-if="adminAuthLoading" class="animate-spin">🔄</span>
+              <span>{{ adminAuthLoading ? '保存中...' : '确认修改并保存' }}</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- Database Persistence & Emergency Reset Info -->
+        <div class="pt-3 border-t border-slate-100 text-[11px] text-slate-500 space-y-1.5">
+          <div class="flex items-start gap-1">
+            <span class="text-blue-600 font-bold shrink-0">💾 数据库存储：</span>
+            <span>管理密码存储在 PostgreSQL 数据库中，完全不依赖 <code class="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">.env</code> 配置文件，部署免配置。</span>
+          </div>
+          <div class="flex items-start gap-1">
+            <span class="text-emerald-600 font-bold shrink-0">⚡ 应急重置：</span>
+            <span>若遗忘密码，在宿主机执行 <code class="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">docker compose exec api python -m app.reset_admin &lt;新密码&gt;</code> 一键重置。</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1828,9 +2199,15 @@
         const activeTab = ref('search');
 
         // Admin Portal & Authorization State
+        // Admin Portal & Authorization State (PostgreSQL Persistent, No .env required)
         const isAdmin = ref(false);
         const showAdminModal = ref(false);
+        const adminAuthMode = ref('login'); // 'login' | 'change'
         const adminTokenInput = ref('');
+        const adminOldPassword = ref('');
+        const adminNewPassword = ref('');
+        const adminConfirmPassword = ref('');
+        const isAdminInitialized = ref(true);
         const adminAuthError = ref('');
         const adminAuthSuccess = ref('');
         const adminAuthLoading = ref(false);
@@ -1839,9 +2216,29 @@
 
         const openAdminModal = (target = 'tasks') => {
           adminTargetTab.value = target;
+          adminAuthMode.value = 'login';
           adminAuthError.value = '';
           adminAuthSuccess.value = '';
           adminTokenInput.value = '';
+          showAdminModal.value = true;
+          // Check backend status for initialization
+          fetch('/api/v1/admin/status')
+            .then(res => res.json())
+            .then(data => {
+              if (data && typeof data.is_initialized === 'boolean') {
+                isAdminInitialized.value = data.is_initialized;
+              }
+            })
+            .catch(() => {});
+        };
+
+        const openChangePasswordModal = () => {
+          adminAuthMode.value = 'change';
+          adminAuthError.value = '';
+          adminAuthSuccess.value = '';
+          adminOldPassword.value = localStorage.getItem('115_admin_token') || sessionStorage.getItem('115_admin_token') || '';
+          adminNewPassword.value = '';
+          adminConfirmPassword.value = '';
           showAdminModal.value = true;
         };
 
@@ -1900,6 +2297,58 @@
           } catch (err) {
             adminAuthLoading.value = false;
             adminAuthError.value = err.message || '口令错误，请重新输入';
+          }
+        };
+
+        const submitChangePassword = async () => {
+          const oldPwd = adminOldPassword.value.trim();
+          const newPwd = adminNewPassword.value.trim();
+          const confirmPwd = adminConfirmPassword.value.trim();
+
+          if (!oldPwd) {
+            adminAuthError.value = '请输入当前的原管理密码';
+            return;
+          }
+          if (newPwd.length < 4) {
+            adminAuthError.value = '新密码长度至少需要4位字符';
+            return;
+          }
+          if (newPwd !== confirmPwd) {
+            adminAuthError.value = '两次输入的新密码不一致，请核对';
+            return;
+          }
+
+          adminAuthLoading.value = true;
+          adminAuthError.value = '';
+          adminAuthSuccess.value = '';
+
+          try {
+            const res = await fetch('/api/v1/admin/change-password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+            });
+            const data = await res.json().catch(() => null);
+
+            if (res.ok && data && data.success) {
+              adminAuthSuccess.value = data.message || '管理密码已成功修改并持久化存入数据库！';
+              isAdminInitialized.value = true;
+              if (localStorage.getItem('115_admin_token')) {
+                localStorage.setItem('115_admin_token', newPwd);
+              } else {
+                sessionStorage.setItem('115_admin_token', newPwd);
+              }
+              setTimeout(() => {
+                showAdminModal.value = false;
+                adminAuthLoading.value = false;
+                showToast('管理密码已修改并持久化存入数据库！');
+              }, 500);
+            } else {
+              throw new Error((data && data.detail) || '修改密码失败，原密码可能错误');
+            }
+          } catch (err) {
+            adminAuthLoading.value = false;
+            adminAuthError.value = err.message || '修改失败，请检查原密码';
           }
         };
 
@@ -2000,6 +2449,18 @@
         const importLoading = ref(false);
         const importResult = ref(null);
         const importSkipDuplicates = ref(true);
+        const importProgressText = ref('');
+        const importBatchCurrent = ref(0);
+        const importBatchTotal = ref(0);
+
+        // System Settings (DB-based) reactive state
+        const systemSettingsCategories = ref([]);
+        const systemSettingsMap = ref({});
+        const settingsLoading = ref(false);
+        const settingsSaving = ref(false);
+        const settingsResetting = ref(false);
+        const activeSettingsCategory = ref('crawler');
+
         const toastMessage = ref('');
         let pollTimer = null;
 
@@ -2340,6 +2801,76 @@
           }
           activeTab.value = 'proxy';
           fetchProxyStatus();
+        };
+
+        const switchToSettings = () => {
+          if (!isAdmin.value) {
+            openAdminModal('settings');
+            return;
+          }
+          activeTab.value = 'settings';
+          fetchSystemSettings();
+        };
+
+        const fetchSystemSettings = async () => {
+          settingsLoading.value = true;
+          try {
+            const res = await fetch('/api/v1/admin/settings');
+            if (!res.ok) throw new Error('获取系统配置失败');
+            const data = await res.json();
+            systemSettingsCategories.value = data.categories || [];
+            // initialize local map for editing
+            const map = {};
+            for (const cat of systemSettingsCategories.value) {
+              for (const item of cat.items) {
+                map[item.key] = item.current;
+              }
+            }
+            systemSettingsMap.value = map;
+          } catch (err) {
+            showToast('获取系统配置异常: ' + err.message);
+          } finally {
+            settingsLoading.value = false;
+          }
+        };
+
+        const saveSystemSettings = async () => {
+          settingsSaving.value = true;
+          try {
+            const res = await fetch('/api/v1/admin/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ settings: systemSettingsMap.value })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '保存配置失败');
+            showToast(data.message || '系统配置已保存至 PostgreSQL 数据库并即刻热生效！');
+            await fetchSystemSettings();
+          } catch (err) {
+            showToast('保存系统配置失败: ' + err.message);
+          } finally {
+            settingsSaving.value = false;
+          }
+        };
+
+        const resetSystemSettings = async (keys = null) => {
+          if (!confirm(keys ? '确定要将所选配置恢复出厂默认值吗？' : '确定要将所有系统配置项恢复为出厂预设值吗？')) return;
+          settingsResetting.value = true;
+          try {
+            const res = await fetch('/api/v1/admin/settings/reset', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ keys: keys })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '重置失败');
+            showToast(data.message || '已成功恢复出厂默认值！');
+            await fetchSystemSettings();
+          } catch (err) {
+            showToast('重置配置失败: ' + err.message);
+          } finally {
+            settingsResetting.value = false;
+          }
         };
 
         const filteredTreeItems = computed(() => {
@@ -2882,30 +3413,78 @@
 
           importLoading.value = true;
           importResult.value = null;
+          importProgressText.value = '';
+
+          const allItems = [...parsedPreviewList.value];
+          const totalItems = allItems.length;
+          const CHUNK_SIZE = 150;
+          const totalBatches = Math.ceil(totalItems / CHUNK_SIZE);
+          importBatchTotal.value = totalBatches;
+          importBatchCurrent.value = 0;
+
+          let cumulativeQueued = 0;
+          let cumulativeDuplicates = 0;
+          let cumulativeFailed = 0;
+          const allTaskIds = [];
 
           try {
-            const res = await fetch('/api/v1/shares/batch-import', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                shares: parsedPreviewList.value,
-                force_crawl: !importSkipDuplicates.value 
-              })
-            });
+            for (let b = 0; b < totalBatches; b++) {
+              importBatchCurrent.value = b + 1;
+              const chunk = allItems.slice(b * CHUNK_SIZE, (b + 1) * CHUNK_SIZE);
+              if (totalBatches > 1) {
+                importProgressText.value = `正在分批提交第 ${b + 1}/${totalBatches} 批 (本批 ${chunk.length} 条，已处理 ${b * CHUNK_SIZE}/${totalItems} 条)...`;
+              } else {
+                importProgressText.value = `正在提交 ${totalItems} 条分享链接...`;
+              }
 
-            if (!res.ok) throw new Error('Import request failed');
-            const data = await res.json();
-            importResult.value = data;
-            showToast('已成功推入抓取队列！');
+              const res = await fetch('/api/v1/shares/batch-import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  shares: chunk,
+                  force_crawl: !importSkipDuplicates.value 
+                })
+              });
+
+              if (!res.ok) {
+                const errData = await res.json().catch(() => null);
+                const errMsg = errData?.detail || `提交第 ${b + 1} 批失败 (HTTP ${res.status})`;
+                throw new Error(errMsg);
+              }
+
+              const data = await res.json();
+              cumulativeQueued += (data.tasks_queued || 0);
+              cumulativeDuplicates += (data.ignored_duplicates || 0);
+              cumulativeFailed += (data.failed_count || 0);
+              if (data.task_ids) {
+                allTaskIds.push(...data.task_ids);
+              }
+            }
+
+            importResult.value = {
+              total_submitted: totalItems,
+              tasks_queued: cumulativeQueued,
+              ignored_duplicates: cumulativeDuplicates,
+              failed_count: cumulativeFailed,
+              batches_processed: totalBatches,
+              task_ids: allTaskIds,
+              message: totalBatches > 1
+                ? `大批量导入圆满完成！已分 ${totalBatches} 批次成功入库 ${totalItems} 条分享，推入抓取队列 ${cumulativeQueued} 条${cumulativeDuplicates > 0 ? `，智能去重跳过 ${cumulativeDuplicates} 条` : ''}${cumulativeFailed > 0 ? `，失败 ${cumulativeFailed} 条` : ''}。`
+                : `成功入队！已处理 ${totalItems} 条分享，推入抓取队列 ${cumulativeQueued} 条${cumulativeDuplicates > 0 ? `，智能去重跳过 ${cumulativeDuplicates} 条` : ''}。`
+            };
+
+            showToast(totalBatches > 1 ? `大批量导入成功！已处理 ${totalItems} 条分享` : '已成功推入抓取队列！');
             if (wsConnected.value) {
               syncWsSubscription();
             } else {
               loadShares(1);
             }
           } catch (err) {
-            showToast('提交失败: ' + err.message);
+            console.error('Batch import failed:', err);
+            showToast('批量提交失败: ' + err.message);
           } finally {
             importLoading.value = false;
+            importProgressText.value = '';
           }
         };
 
@@ -3020,6 +3599,19 @@
           switchToTasks,
           submitBatchImport,
           importSkipDuplicates,
+          importProgressText,
+          importBatchCurrent,
+          importBatchTotal,
+          systemSettingsCategories,
+          systemSettingsMap,
+          settingsLoading,
+          settingsSaving,
+          settingsResetting,
+          activeSettingsCategory,
+          switchToSettings,
+          fetchSystemSettings,
+          saveSystemSettings,
+          resetSystemSettings,
           getExistingShareInfo,
           recoveringStuck,
           recoverStuckTasks,
@@ -3042,15 +3634,22 @@
           copyScriptCode,
           isAdmin,
           showAdminModal,
+          adminAuthMode,
           adminTokenInput,
+          adminOldPassword,
+          adminNewPassword,
+          adminConfirmPassword,
+          isAdminInitialized,
           adminAuthError,
           adminAuthSuccess,
           adminAuthLoading,
           adminTargetTab,
           rememberAdminSession,
           openAdminModal,
+          openChangePasswordModal,
           fillDefaultAdminToken,
           submitAdminAuth,
+          submitChangePassword,
           logoutAdmin,
         };
       }

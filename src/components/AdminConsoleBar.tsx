@@ -52,6 +52,11 @@ export const AdminConsoleBar: React.FC<AdminConsoleBarProps> = ({
       icon: ShieldCheck,
       badge: proxyBannedCount > 0 ? `${proxyBannedCount} 封禁` : undefined,
       badgeColor: 'bg-rose-500 text-white'
+    },
+    {
+      id: 'settings',
+      name: '系统配置',
+      icon: SlidersHorizontal
     }
   ];
 

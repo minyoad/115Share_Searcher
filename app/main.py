@@ -10,21 +10,32 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, W
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import (
+    DEFAULT_INITIAL_PASSWORD,
+    is_admin_initialized,
+    set_admin_password,
+    verify_admin_token,
+)
 from app.config import settings
-from app.database import get_db, init_db
+from app.database import AsyncSessionLocal, get_db, init_db
 from app.models import File, Share, ShareStatus
 from app.proxy import ProxyManager
 from app.schemas import (
+    AdminChangePasswordRequest,
+    AdminInitPasswordRequest,
     AdminStatusResponse,
     AdminVerifyRequest,
     AdminVerifyResponse,
     BatchCrawlRequest,
     BatchCrawlResponse,
+    BatchDeleteSharesRequest,
+    BatchDeleteSharesResponse,
     BatchImportRequest,
     BatchImportTaskResult,
+    DeleteShareResponse,
     DirectoryListResponse,
     ExportSharesRequest,
     ExportSharesResponse,
@@ -37,9 +48,13 @@ from app.schemas import (
     SearchResultItem,
     ShareInfo,
     ShareListResponse,
+    SystemSettingsGroupResponse,
+    SystemSettingsResetRequest,
+    SystemSettingsUpdateRequest,
     TriggerCrawlResponse,
     format_size,
 )
+from app.settings_manager import DatabaseSettingsManager, load_and_sync_all_settings
 from app.worker import enqueue_crawl_task
 from app.ws import TaskWebSocketManager
 
@@ -52,15 +67,24 @@ logger = logging.getLogger("app.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for DB schema init, Proxy subsystem, and WebSocket task workers"""
+    """Lifespan context manager for DB schema init, Dynamic Settings, Proxy subsystem, and WebSocket task workers"""
     logger.info("Application starting up... Initializing DB...")
     await init_db()
-    # Initialize Proxy Subsystem with DB Persistence
+
+    # 1. 从 PostgreSQL 数据库持久化载入并同步所有系统配置项（免 .env 部署核心机制）
+    try:
+        async with AsyncSessionLocal() as session:
+            await load_and_sync_all_settings(session)
+        logger.info("Dynamic system settings loaded from PostgreSQL successfully.")
+    except Exception as set_err:
+        logger.warning(f"Failed to load dynamic settings from DB: {set_err}", exc_info=True)
+
+    # 2. 初始化代理子系统
     proxy_mgr = ProxyManager.get_instance()
     await proxy_mgr.sync_from_storage()
     await proxy_mgr.initialize()
 
-    # Initialize WebSocket Manager background tasks
+    # 3. 初始化 WebSocket 管理器后台订阅
     stop_event = asyncio.Event()
     ws_manager = TaskWebSocketManager.get_instance()
     redis_listener_task = asyncio.create_task(ws_manager.start_redis_listener(stop_event))
@@ -603,74 +627,140 @@ async def seed_demo_shares():
     "/api/v1/shares/batch-import",
     response_model=BatchImportTaskResult,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="批量提交 115 分享链接进行异步抓取索引",
+    summary="批量提交 115 分享链接进行异步抓取索引 (支持大批量多批次处理)",
 )
 async def batch_import_shares(
     payload: BatchImportRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    接收 115 分享代码/链接列表，自动解析提取码，推入 Redis 队列进行异步 BFS 递归抓取与索引
+    接收 115 分享代码/链接列表，自动解析提取码，推入 Redis 队列进行异步 BFS 递归抓取与索引。
+    全面支持上千甚至上万条链接大批量提交，内部采用高吞吐分批事务（每批 150 条）与批量查询，
+    杜绝单条逐个 commit 导致的数据库锁争用与超时中断。
     """
-    task_ids = []
-    queued_count = 0
-    duplicate_count = 0
+    if not payload.shares:
+        raise HTTPException(status_code=400, detail="未提供任何分享链接")
+
+    # 1. 规范化并清洗输入列表，自动按 share_code 去重
+    clean_items_map: Dict[str, str] = {}
+    invalid_count = 0
 
     for item in payload.shares:
-        if not item.share_code:
+        if not item.share_code or not str(item.share_code).strip():
+            invalid_count += 1
             continue
+        sc = str(item.share_code).strip()
+        rc = str(item.receive_code or "").strip()
+        # 若重复出现，优先保留有提取码的记录
+        if sc not in clean_items_map or (rc and not clean_items_map[sc]):
+            clean_items_map[sc] = rc
 
-        clean_code = item.share_code.strip()
-        pwd = (item.receive_code or "").strip()
+    total_submitted = len(payload.shares)
+    distinct_codes = list(clean_items_map.keys())
 
-        # Check existing share in DB
-        stmt = select(Share).where(Share.share_code == clean_code)
-        res = await db.execute(stmt)
-        existing = res.scalar_one_or_none()
+    if not distinct_codes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"提交的 {total_submitted} 条数据中均未识别出合法的 115 分享代码，请检查链接格式"
+        )
 
-        if existing:
-            if existing.status == ShareStatus.ACTIVE.value and existing.file_count > 0 and not payload.force_crawl:
-                duplicate_count += 1
-                continue
-            else:
-                existing.status = ShareStatus.PENDING.value
-                if pwd:
-                    existing.receive_code = pwd
-                await db.commit()
-        else:
-            new_share = Share(
-                share_code=clean_code,
-                receive_code=pwd,
-                title=f"115 分享 ({clean_code})",
-                status=ShareStatus.PENDING.value,
-            )
-            db.add(new_share)
+    task_ids: List[str] = []
+    queued_count = 0
+    duplicate_count = 0
+    failed_count = 0
+    batches_processed = 0
+
+    # 2. 按 150 条为一个批次进行分批处理，兼顾事务响应性与吞吐量
+    CHUNK_SIZE = 150
+    for i in range(0, len(distinct_codes), CHUNK_SIZE):
+        chunk_codes = distinct_codes[i : i + CHUNK_SIZE]
+        batches_processed += 1
+
+        try:
+            # 批量查询该批次中已存在的记录
+            stmt = select(Share).where(Share.share_code.in_(chunk_codes))
+            res = await db.execute(stmt)
+            existing_shares = {s.share_code: s for s in res.scalars().all()}
+
+            new_share_objects = []
+            chunk_queue_tasks = []
+
+            for code in chunk_codes:
+                pwd = clean_items_map.get(code, "")
+                existing = existing_shares.get(code)
+
+                if existing:
+                    if (
+                        existing.status == ShareStatus.ACTIVE.value
+                        and (existing.file_count or 0) > 0
+                        and not payload.force_crawl
+                    ):
+                        duplicate_count += 1
+                        continue
+                    else:
+                        existing.status = ShareStatus.PENDING.value
+                        if pwd:
+                            existing.receive_code = pwd
+                else:
+                    new_share = Share(
+                        share_code=code,
+                        receive_code=pwd,
+                        title=f"115 分享 ({code})",
+                        status=ShareStatus.PENDING.value,
+                    )
+                    new_share_objects.append(new_share)
+
+                chunk_queue_tasks.append((code, pwd))
+
+            if new_share_objects:
+                db.add_all(new_share_objects)
+
             await db.commit()
 
-        # Enqueue background crawl task (with resume support)
-        task_id = await enqueue_crawl_task(
-            share_code=clean_code,
-            receive_code=pwd,
-            resume=True,
-        )
-        task_ids.append(task_id)
-        queued_count += 1
+            # 推入 Redis 任务队列
+            for code, pwd in chunk_queue_tasks:
+                try:
+                    task_id = await enqueue_crawl_task(
+                        share_code=code,
+                        receive_code=pwd,
+                        resume=True,
+                    )
+                    task_ids.append(task_id)
+                    queued_count += 1
+                except Exception as q_err:
+                    logger.warning(f"[batch_import_shares] Failed to enqueue {code}: {q_err}")
+                    failed_count += 1
 
-    # Notify WebSocket clients about newly queued items
+        except Exception as chunk_exc:
+            logger.error(f"[batch_import_shares] Error processing batch {batches_processed}: {chunk_exc}", exc_info=True)
+            await db.rollback()
+            failed_count += len(chunk_codes)
+
+    # 3. WebSocket 实时广播
     if queued_count > 0:
         await TaskWebSocketManager.get_instance().notify_task_event(
             "batch_imported",
-            {"queued_count": queued_count, "task_ids": task_ids}
+            {
+                "queued_count": queued_count,
+                "total_submitted": total_submitted,
+                "task_ids": task_ids[:100],  # 截断避免报文过大
+            }
         )
 
-    msg_parts = [f"已成功接收 {len(payload.shares)} 条分享链接，已创建/更新并在后台队列开始抓取 {queued_count} 条。"]
+    msg_parts = [f"已成功接收处理 {total_submitted} 条链接（含 {len(distinct_codes)} 条唯一分享），已成功推入后台抓取队列 {queued_count} 条（共处理 {batches_processed} 个批次）。"]
     if duplicate_count > 0:
-        msg_parts.append(f"（系统自动去重跳过了 {duplicate_count} 条已完成且已收录的重复链接）")
+        msg_parts.append(f"智能去重跳过了 {duplicate_count} 条已完成收录的分享链接。")
+    if invalid_count > 0:
+        msg_parts.append(f"跳过 {invalid_count} 条无效或无法解析的空白行。")
+    if failed_count > 0:
+        msg_parts.append(f"⚠️ 另有 {failed_count} 条入队异常，请稍后重试。")
 
     return BatchImportTaskResult(
-        total_submitted=len(payload.shares),
+        total_submitted=total_submitted,
         tasks_queued=queued_count,
         ignored_duplicates=duplicate_count,
+        failed_count=failed_count,
+        batches_processed=batches_processed,
         task_ids=task_ids,
         message=" ".join(msg_parts)
     )
@@ -955,6 +1045,115 @@ async def report_invalid_share(
     )
 
 
+@app.delete(
+    "/api/v1/shares/{share_code}",
+    response_model=DeleteShareResponse,
+    summary="彻底移除单个 115 分享链接并级联清理名下全部文件记录",
+)
+async def delete_share(
+    share_code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    根据 share_code 彻底移除分享链接，并在数据库事务中强力级联删除名下所有已收录的文件与文件夹记录，
+    彻底防止链接失效后脏数据继续在搜索中被检索出。
+    """
+    clean_code = share_code.strip()
+    stmt = select(Share).where(Share.share_code == clean_code)
+    share_obj = (await db.execute(stmt)).scalar_one_or_none()
+
+    if not share_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"未找到分享代码为 {clean_code} 的记录"
+        )
+
+    # 统计并显式删除关联文件记录（确保即使级联约束缺失也能彻底清空）
+    count_stmt = select(func.count(File.id)).where(File.share_id == share_obj.id)
+    file_count = (await db.execute(count_stmt)).scalar() or 0
+
+    await db.execute(delete(File).where(File.share_id == share_obj.id))
+    await db.delete(share_obj)
+    await db.commit()
+
+    logger.info(f"[delete_share] Deleted share {clean_code} and cascade removed {file_count} files.")
+
+    # 触发 WebSocket 实时广播，通知全量前端页面更新状态与统计
+    await TaskWebSocketManager.get_instance().notify_task_event(
+        "share_deleted",
+        {"share_code": clean_code, "deleted_files": file_count}
+    )
+    await TaskWebSocketManager.get_instance().broadcast_full_update()
+
+    return DeleteShareResponse(
+        status="success",
+        share_code=clean_code,
+        deleted_files=file_count,
+        message=f"已彻底移除分享 {clean_code}，并同步清除了名下的 {file_count} 个文件记录！"
+    )
+
+
+@app.post(
+    "/api/v1/shares/batch-delete",
+    response_model=BatchDeleteSharesResponse,
+    summary="批量彻底移除选中的分享链接及其名下的全部文件记录",
+)
+async def batch_delete_shares(
+    payload: BatchDeleteSharesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    批量删除指定的分享链接列表，并在事务内级联清空其全部关联文件
+    """
+    clean_codes = [c.strip() for c in payload.share_codes if c and c.strip()]
+    if not clean_codes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请提供至少一个有效的分享代码"
+        )
+
+    stmt = select(Share).where(Share.share_code.in_(clean_codes))
+    shares = (await db.execute(stmt)).scalars().all()
+
+    if not shares:
+        return BatchDeleteSharesResponse(
+            status="success",
+            deleted_shares=0,
+            deleted_files=0,
+            message="未在数据库中找到匹配的分享链接记录"
+        )
+
+    share_ids = [s.id for s in shares]
+    count_stmt = select(func.count(File.id)).where(File.share_id.in_(share_ids))
+    file_count = (await db.execute(count_stmt)).scalar() or 0
+
+    await db.execute(delete(File).where(File.share_id.in_(share_ids)))
+    for s in shares:
+        await db.delete(s)
+    await db.commit()
+
+    deleted_count = len(shares)
+    logger.info(f"[batch_delete_shares] Batch deleted {deleted_count} shares and {file_count} files.")
+
+    await TaskWebSocketManager.get_instance().notify_task_event(
+        "shares_batch_deleted",
+        {
+            "share_codes": [s.share_code for s in shares],
+            "deleted_shares": deleted_count,
+            "deleted_files": file_count,
+        }
+    )
+    await TaskWebSocketManager.get_instance().broadcast_full_update()
+
+    return BatchDeleteSharesResponse(
+        status="success",
+        deleted_shares=deleted_count,
+        deleted_files=file_count,
+        message=f"已成功批量移除 {deleted_count} 个分享链接，并级联删除了名下的 {file_count} 个文件记录！"
+    )
+
+
+
 # ---------------------------------------------------------
 # Proxy Pool Management & Diagnostic Endpoints
 # ---------------------------------------------------------
@@ -1103,22 +1302,33 @@ async def manual_recover_stuck_tasks(
     response_model=AdminVerifyResponse,
     summary="验证管理员授权口令或密钥",
 )
-async def verify_admin_auth(payload: AdminVerifyRequest):
+async def verify_admin_auth(
+    payload: AdminVerifyRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
-    验证管理员口令或 Token。通过验证后授权访问任务监控、链接提交、爬虫引擎及代理池配置管理
+    验证管理员口令或 Token。完全从 PostgreSQL 数据库中验证，不依赖 .env 配置。
     """
     if not settings.ADMIN_AUTH_ENABLED:
         return AdminVerifyResponse(
             authenticated=True,
             message="系统未开启口令保护，已直接开放管理权限",
-            token=payload.token or "unprotected"
+            token=payload.token or "unprotected",
+            is_initialized=True
         )
 
-    if payload.token and payload.token.strip() == settings.ADMIN_SECRET.strip():
+    is_init = await is_admin_initialized(db)
+    is_valid = await verify_admin_token(db, payload.token)
+
+    if is_valid:
+        msg = "管理员授权验证通过，已解锁管理入口"
+        if not is_init:
+            msg = "使用初始默认口令 (admin115) 验证通过，建议在管理控制台及时修改为您自己的专属密码"
         return AdminVerifyResponse(
             authenticated=True,
-            message="管理员授权验证通过，已解锁管理入口",
-            token=payload.token.strip()
+            message=msg,
+            token=payload.token.strip(),
+            is_initialized=is_init
         )
     else:
         raise HTTPException(
@@ -1134,20 +1344,166 @@ async def verify_admin_auth(payload: AdminVerifyRequest):
 )
 async def get_admin_status(
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
-    admin_token: Optional[str] = Query(None, alias="admin_token")
+    admin_token: Optional[str] = Query(None, alias="admin_token"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    检查当前客户端是否已具备管理员授权状态
+    检查当前客户端是否已具备管理员授权状态，并反馈密码是否已在数据库完成个性化设定
     """
+    is_init = await is_admin_initialized(db)
     provided = x_admin_token or admin_token
-    is_auth = (not settings.ADMIN_AUTH_ENABLED) or (
-        bool(provided) and provided.strip() == settings.ADMIN_SECRET.strip()
-    )
+
+    if not settings.ADMIN_AUTH_ENABLED:
+        return AdminStatusResponse(
+            auth_enabled=False,
+            authenticated=True,
+            is_initialized=is_init,
+            message="系统未开启口令保护，已直接开放管理权限"
+        )
+
+    is_auth = False
+    if provided:
+        is_auth = await verify_admin_token(db, provided)
+
     return AdminStatusResponse(
         auth_enabled=settings.ADMIN_AUTH_ENABLED,
         authenticated=is_auth,
+        is_initialized=is_init,
         message="已授权访问管理控制台" if is_auth else "未授权，需在管理入口验证口令"
     )
+
+
+@app.post(
+    "/api/v1/admin/init",
+    response_model=AdminVerifyResponse,
+    summary="首次设置管理员密码 (免配置 .env)",
+)
+async def init_admin_password(
+    payload: AdminInitPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    初次使用部署时，直接在 Web 界面设定专属管理密码并持久化存入 PostgreSQL 数据库，彻底告别 .env 配置
+    """
+    is_init = await is_admin_initialized(db)
+    if is_init:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="管理员密码已经完成初始化，若需修改请使用修改密码功能"
+        )
+
+    new_pwd = payload.new_password.strip()
+    if len(new_pwd) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新管理密码长度不得少于 4 个字符"
+        )
+
+    await set_admin_password(db, new_pwd)
+    return AdminVerifyResponse(
+        authenticated=True,
+        message="管理密码初始化成功！已安全保存在数据库持久化存储中，重启不受影响",
+        token=new_pwd,
+        is_initialized=True
+    )
+
+
+@app.post(
+    "/api/v1/admin/change-password",
+    response_model=Dict[str, Any],
+    summary="在线修改管理员密码 (直接保存至数据库)",
+)
+async def change_admin_password(
+    payload: AdminChangePasswordRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    在线修改管理员密码。验证原密码通过后将新密码安全加盐写入数据库 system_settings 表，无需修改任何服务器文件。
+    """
+    is_valid_old = await verify_admin_token(db, payload.old_password)
+    if not is_valid_old:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="原管理员口令不正确，无法修改密码"
+        )
+
+    new_pwd = payload.new_password.strip()
+    if len(new_pwd) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新管理密码长度不得少于 4 个字符"
+        )
+
+    await set_admin_password(db, new_pwd)
+    return {
+        "success": True,
+        "message": "管理员密码已成功更新并持久化保存至数据库！",
+        "new_token": new_pwd
+    }
+
+
+@app.get(
+    "/api/v1/admin/settings",
+    response_model=SystemSettingsGroupResponse,
+    summary="获取全量动态系统配置项 (来自 PostgreSQL 数据库)",
+)
+async def get_system_settings(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取系统中所有分类的配置项（爬虫引擎、任务调度、代理池、通用配置）。
+    所有配置项均已迁移到 PostgreSQL 数据库持久化存储，不依赖 .env 文件。
+    """
+    mgr = DatabaseSettingsManager.get_instance()
+    grouped_data = await mgr.get_grouped_settings(db)
+    return SystemSettingsGroupResponse(**grouped_data)
+
+
+@app.post(
+    "/api/v1/admin/settings",
+    summary="批量更新系统配置项至 PostgreSQL 数据库 (热生效，免重启)",
+)
+async def update_system_settings(
+    payload: SystemSettingsUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    修改配置项并直接持久化写入 PostgreSQL system_settings 表，
+    同时在内存中即刻热生效，彻底告别重启容器或手动编辑 .env 文件。
+    """
+    if not payload.settings:
+        raise HTTPException(status_code=400, detail="未提供任何待更新的配置项")
+
+    mgr = DatabaseSettingsManager.get_instance()
+    applied = await mgr.update_settings(payload.settings, db)
+    return {
+        "success": True,
+        "updated_count": len(applied),
+        "applied_settings": applied,
+        "message": f"成功保存并应用 {len(applied)} 项系统配置至 PostgreSQL 数据库，已即刻生效！"
+    }
+
+
+@app.post(
+    "/api/v1/admin/settings/reset",
+    summary="恢复配置项至出厂默认值 (同步重置数据库)",
+)
+async def reset_system_settings(
+    payload: Optional[SystemSettingsResetRequest] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    将指定（或全部）配置项在 PostgreSQL 中重置为系统出厂预设值
+    """
+    keys = payload.keys if payload else None
+    mgr = DatabaseSettingsManager.get_instance()
+    applied = await mgr.reset_settings(keys, db)
+    return {
+        "success": True,
+        "reset_count": len(applied),
+        "applied_settings": applied,
+        "message": f"成功将 {len(applied)} 项配置恢复为系统出厂默认值！"
+    }
 
 
 
