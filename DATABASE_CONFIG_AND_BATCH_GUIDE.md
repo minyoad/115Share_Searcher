@@ -308,3 +308,41 @@ volumes:
     }
     ```
 
+---
+
+## 六、Google AdSense 商业化广告系统接入与配置指南
+
+针对站长商业化运营需求，系统完整集成了 Google AdSense 官方广告接入规范，配置项统一持久化存储于 PostgreSQL 数据库，支持在前端管理后台免重启热更新。
+
+### 1. 配置项说明
+
+| 配置项键名 | 类型 | 默认值 | 详细说明 |
+| :--- | :--- | :--- | :--- |
+| **`ADSENSE_ENABLED`** | `bool` | `false` | **总开关**。开启后全站公开页面自动加载 AdSense SDK 脚本与版位 |
+| **`ADSENSE_CLIENT_ID`** | `str` | `""` | **发布商客户 ID** (Publisher ID)，格式如 `ca-pub-1234567890123456` |
+| **`ADSENSE_SLOT_ID`** | `str` | `""` | **广告单元代码** (Slot ID)，在搜索与详情流展示的固定单元代码（纯数字） |
+| **`ADSENSE_AUTO_ADS`** | `bool` | `true` | **全自动广告 (Auto Ads)**，由 Google AI 算法自动探测最佳布局与插页 |
+| **`ADSENSE_TEST_MODE`** | `bool` | `false` | **测试模式** (`data-adtest="on"`)，调试阶段开启可避免站长自测被判定无效点击 |
+
+### 2. 交互操作与热生效机制
+1. 打开应用后台的 **「系统配置」** 选项卡；
+2. 切换至 **「Google AdSense 商业化广告」** 分类，界面提供了专属接入向导与 **「填入测试预设」** 便捷按钮；
+3. 输入您的 Google AdSense 客户 ID（如 `ca-pub-xxxxxxxxxxxxxxxx`），根据需要输入指定 Slot ID，并开启总开关；
+4. 点击 **「保存并热生效」**，系统会将配置立即写入 PostgreSQL 的 `system_settings` 表并刷新内存与公共端点 `/api/v1/public/adsense-config`；
+5. 公开搜索页面收到变更后自动动态注入官方脚本 `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-..."></script>`，实现零重启秒级上线。
+
+### 3. 公共 API 端点
+- **获取公共 AdSense 配置（免管理员认证）**：
+  - `GET /api/v1/public/adsense-config`
+  - 返回值：
+    ```json
+    {
+      "enabled": true,
+      "client_id": "ca-pub-1234567890123456",
+      "slot_id": "8912345678",
+      "auto_ads": true,
+      "test_mode": false
+    }
+    ```
+
+

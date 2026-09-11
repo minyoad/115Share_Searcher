@@ -96,3 +96,11 @@ export interface SystemSettingsGroup {
   total_count: number;
 }
 
+export interface AdSenseConfig {
+  enabled: boolean;
+  client_id: string;
+  slot_id: string;
+  auto_ads: boolean;
+  test_mode: boolean;
+}
+

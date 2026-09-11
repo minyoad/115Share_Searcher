@@ -28,16 +28,17 @@
 ├── .github
 │   └── workflows
 │       └── docker-build-push.yml # GitHub Actions 自动多架构编译与 GHCR 镜像发布
-├── docker-compose.yml       # 开发环境一键编排 (带热重载与本地构建)
-├── docker-compose.prod.yml  # 生产环境实际部署 (预编译镜像/多Worker/日志轮转/健康检查/内存调优)
-├── .env.prod.example        # 生产环境配置模板
+├── docker-compose.yml       # 开发/基础环境一键编排 (零 .env 依赖，一键直接运行)
+├── docker-compose.prod.yml  # 生产环境部署 (零 .env 依赖/预编译镜像/多Worker/日志轮转/健康检查/内存调优)
+├── DATABASE_CONFIG_AND_BATCH_GUIDE.md # 数据库配置持久化 (免 .env) 与万级链接分批切片引擎指南
 ├── Dockerfile               # 容器构建镜像定义 (Python 3.11-slim + libpq)
 ├── requirements.txt         # Python 依赖清单
 ├── app
 │   ├── __init__.py          # 模块标识与版本信息
-│   ├── config.py            # Pydantic v2 环境配置管理
+│   ├── config.py            # Pydantic v2 核心运行配置
+│   ├── settings_manager.py  # PostgreSQL 数据库配置管理器 (热加载、分类管理与重置)
 │   ├── database.py          # SQLAlchemy 2.0 Async 引擎、会话管理与 pg_trgm 扩展自启
-│   ├── models.py            # 声明式模型 (Share, File, GIN 索引)
+│   ├── models.py            # 声明式模型 (Share, File, SystemSetting)
 │   ├── schemas.py           # Pydantic v2 请求响应校验模型与 URL 正则解析
 │   ├── crawler.py           # 115 Snapshot API BFS 递归爬虫引擎
 │   ├── worker.py            # Redis 队列后台消费 Worker
@@ -48,29 +49,30 @@
 
 ---
 
-## 🚀 部署方式
+## 🚀 部署方式 (零 .env 依赖，即刻开箱即用)
 
-### 方式 1：生产环境实际部署 (`docker-compose.prod.yml`)
+本系统已彻底移除传统的 `.env` 配置文件依赖。所有业务参数（115 VIP Cookie、爬虫并发度、频控速率、代理池、自动看门狗、Google AdSense、管理员密码）全部通过 **PostgreSQL 数据库 `system_settings` 表** 持久化保存，并通过 Web 管理后台直接热修改与热重载。
 
-针对 VPS、独立服务器或私有云生产环境设计，预设日志大小轮转限制、PostgreSQL 内存参数调优、多协程高并发 Worker 以及健康检查心跳：
+### 方式 1：生产环境部署 (`docker-compose.prod.yml`)
+
+无需创建或配置任何 `.env` 文件，直接执行命令拉起全套生产容器：
 
 ```bash
-# 1. 复制生产配置文件模板
-cp .env.prod.example .env
-
-# 2. 编辑 .env 修改密码与配置 (尤其是 POSTGRES_PASSWORD 与 REDIS_PASSWORD)
-vim .env
-
-# 3. 启动全套生产服务 (PostgreSQL, Redis, FastAPI, Crawler Worker)
+# 1. 启动全套生产服务 (PostgreSQL, Redis, FastAPI, Crawler Worker)
 docker compose -f docker-compose.prod.yml up -d
 
-# 4. 查看运行状态与各容器健康度
+# 2. 查看运行状态与各容器健康检查
 docker compose -f docker-compose.prod.yml ps
 
-# 5. 查看实时滚动日志 (带 20MB 日志轮转保护)
+# 3. 查看实时滚动日志 (带 20MB 日志轮转保护)
 docker compose -f docker-compose.prod.yml logs -f --tail=100
 
-# 6. 停止或重启服务
+# 4. 初始化配置 (无需编辑任何服务器文件)
+#    打开浏览器访问: http://<你的服务器IP>:8000
+#    首次访问后台管理时直接在 Web 界面设定专属管理员密码；
+#    在「系统配置」与「代理池管理」界面填写 115 Cookie、代理等，即刻内存热生效！
+
+# 5. 停止或重启服务
 docker compose -f docker-compose.prod.yml restart
 # docker compose -f docker-compose.prod.yml down
 ```

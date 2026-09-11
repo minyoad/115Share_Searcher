@@ -281,6 +281,48 @@ SYSTEM_CONFIG_REGISTRY: Dict[str, Dict[str, Any]] = {
         "description": "展示在页面与接口头部的应用名称",
         "sensitive": False,
     },
+
+    # ── 5. Google AdSense 商业化广告系统 (Google AdSense Integration) ──
+    "ADSENSE_ENABLED": {
+        "default": False,
+        "type": "bool",
+        "category": "adsense",
+        "title": "启用 Google AdSense",
+        "description": "总开关。开启后将在公共页面自动注入 AdSense 脚本并展示商业化广告位",
+        "sensitive": False,
+    },
+    "ADSENSE_CLIENT_ID": {
+        "default": "",
+        "type": "str",
+        "category": "adsense",
+        "title": "AdSense 客户 ID (Publisher ID)",
+        "description": "Google AdSense 账号发布商唯一标识，格式如 ca-pub-1234567890123456",
+        "sensitive": False,
+    },
+    "ADSENSE_SLOT_ID": {
+        "default": "",
+        "type": "str",
+        "category": "adsense",
+        "title": "固定广告单元 ID (Slot ID)",
+        "description": "可选。在搜索结果流与详情页展示的指定广告单元代码 (纯数字如 1234567890)，留空则仅使用 Auto Ads",
+        "sensitive": False,
+    },
+    "ADSENSE_AUTO_ADS": {
+        "default": True,
+        "type": "bool",
+        "category": "adsense",
+        "title": "启用全自动广告 (Auto Ads)",
+        "description": "开启后 Google AI 算法将自动识别最佳版位并在页面合适位置呈现响应式广告",
+        "sensitive": False,
+    },
+    "ADSENSE_TEST_MODE": {
+        "default": False,
+        "type": "bool",
+        "category": "adsense",
+        "title": "测试广告模式 (Test Mode)",
+        "description": "本地调试或刚接入审核阶段建议开启 (data-adtest='on')，避免因站长自测访问误点导致账号被限制",
+        "sensitive": False,
+    },
 }
 
 CATEGORY_NAMES = {
@@ -288,6 +330,7 @@ CATEGORY_NAMES = {
     "worker": "后台任务调度与看门狗",
     "proxy": "代理池与网络中继",
     "auth": "管理安全与授权",
+    "adsense": "Google AdSense 商业化广告",
     "general": "全局通用设置",
 }
 

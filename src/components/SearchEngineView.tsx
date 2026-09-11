@@ -27,8 +27,9 @@ import {
   Trash2,
   AlertTriangle
 } from 'lucide-react';
-import { FileRecord, ShareRecord } from '../types';
+import { FileRecord, ShareRecord, AdSenseConfig } from '../types';
 import { CidHelperModal } from './CidHelperModal';
+import { AdSenseBanner } from './AdSenseBanner';
 
 interface HotSearchItem {
   id: string;
@@ -68,6 +69,7 @@ interface SearchEngineViewProps {
   onOpenTree: (shareCode: string, targetCid?: string, highlightId?: string) => void;
   onReportShare: (shareCode: string) => void;
   onDeleteShare?: (shareCode: string) => void;
+  adsenseConfig?: AdSenseConfig | null;
 }
 
 export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
@@ -76,6 +78,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   onOpenTree,
   onReportShare,
   onDeleteShare,
+  adsenseConfig,
 }) => {
   const [keyword, setKeyword] = useState('');
   const [selectedExt, setSelectedExt] = useState('');
@@ -511,11 +514,14 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
         </div>
         <button
           onClick={() => setIsCidHelperOpen(true)}
-          className="self-start sm:self-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 text-xs active:scale-95"
+          className="self-start sm:self-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 text-xs active:scale-95 cursor-pointer"
         >
           <span>查看油猴脚本 / 解决方案</span>
         </button>
       </div>
+
+      {/* Google AdSense Top Banner */}
+      <AdSenseBanner config={adsenseConfig} slotType="banner" />
 
       {/* Results Cards List */}
       <div className="space-y-3">

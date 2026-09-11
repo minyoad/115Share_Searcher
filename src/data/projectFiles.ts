@@ -5,21 +5,19 @@ export const PROJECT_FILES: ProjectFile[] = [
     name: 'docker-compose.yml',
     path: 'docker-compose.yml',
     language: 'yaml',
-    description: 'PostgreSQL 15 (pg_trgm) + Redis 7 + FastAPI API + Async Worker 容器编排',
-    content: `version: "3.9"
-
-services:
+    description: 'PostgreSQL 15 (pg_trgm) + Redis 7 + FastAPI API + Async Worker 容器编排 (零 .env 依赖直接运行)',
+    content: `services:
   postgres:
     image: postgres:15-alpine
     container_name: 115_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: \${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-postgres123}
-      POSTGRES_DB: \${POSTGRES_DB:-db_115share}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: db_115share
       TZ: Asia/Shanghai
     ports:
-      - "\${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,13 +30,13 @@ services:
     image: redis:7-alpine
     container_name: 115_redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass \${REDIS_PASSWORD:-redis123}
+    command: redis-server --appendonly yes --requirepass redis123
     ports:
-      - "\${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD:-redis123}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis123", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -51,12 +49,11 @@ services:
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "\${API_PORT:-8000}:8000"
+      - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD:-postgres123}@postgres:5432/\${POSTGRES_DB:-db_115share}
-      - REDIS_URL=redis://:\${REDIS_PASSWORD:-redis123}@redis:6379/0
-      - CRAWLER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36
-      - CRAWLER_COOKIE=\${CRAWLER_COOKIE:-}
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/db_115share
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - TZ=Asia/Shanghai
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,9 +68,9 @@ services:
     restart: unless-stopped
     command: python -m app.worker
     environment:
-      - DATABASE_URL=postgresql+asyncpg://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD:-postgres123}@postgres:5432/\${POSTGRES_DB:-db_115share}
-      - REDIS_URL=redis://:\${REDIS_PASSWORD:-redis123}@redis:6379/0
-      - CONCURRENCY=4
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/db_115share
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - TZ=Asia/Shanghai
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,8 +87,18 @@ volumes:
     name: 'docker-compose.prod.yml',
     path: 'docker-compose.prod.yml',
     language: 'yaml',
-    description: '生产环境实际部署编排 (多Worker/预编译镜像/日志轮转/健康检查/内存调优)',
-    content: `version: "3.9"
+    description: '生产环境实际部署编排 (零 .env 依赖直接运行/日志轮转/健康检查/内存调优)',
+    content: `# ==============================================================================
+# 115 Cloud Drive Share Search Service (115 分享资源搜索服务)
+# 生产环境部署编排文件 (Production Docker Compose - 零 .env 依赖纯净版)
+# 
+# 启动方式:
+#   直接执行命令即可，无需配置或创建任何 .env 文件！
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 所有业务配置（115 VIP Cookie、爬虫并发、代理池、看门狗、Google AdSense、管理员密码）
+# 均在部署后通过 Web 管理后台直接修改并持久化存入 PostgreSQL 数据库，支持秒级热生效！
+# ==============================================================================
 
 services:
   postgres:
@@ -107,16 +114,16 @@ services:
       -c max_connections=200
       -c checkpoint_completion_target=0.9
     environment:
-      POSTGRES_USER: \${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-postgres123}
-      POSTGRES_DB: \${POSTGRES_DB:-db_115share}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: db_115share
       TZ: Asia/Shanghai
     ports:
-      - "\${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \\$\\$POSTGRES_USER -d \\$\\$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db_115share"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -136,17 +143,17 @@ services:
     command: >
       redis-server 
       --appendonly yes 
-      --requirepass \${REDIS_PASSWORD:-redis123} 
+      --requirepass redis123 
       --maxmemory 512mb 
       --maxmemory-policy noeviction
     environment:
       TZ: Asia/Shanghai
     ports:
-      - "\${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD:-redis123}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis123", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -160,7 +167,7 @@ services:
       - 115_network
 
   api:
-    image: \${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:\${IMAGE_TAG:-latest}
+    image: ghcr.io/minyoad/115share_searcher:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -170,26 +177,16 @@ services:
       uvicorn app.main:app 
       --host 0.0.0.0 
       --port 8000 
-      --workers \${API_WORKERS:-4} 
+      --workers 4 
       --proxy-headers 
       --forwarded-allow-ips='*' 
       --access-log
     ports:
-      - "\${API_PORT:-8000}:8000"
+      - "8000:8000"
     environment:
       - TZ=Asia/Shanghai
-      - DATABASE_URL=postgresql+asyncpg://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD:-postgres123}@postgres:5432/\${POSTGRES_DB:-db_115share}
-      - REDIS_URL=redis://:\${REDIS_PASSWORD:-redis123}@redis:6379/0
-      - CRAWLER_USER_AGENT=\${CRAWLER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
-      - CRAWLER_COOKIE=\${CRAWLER_COOKIE:-}
-      - CRAWLER_RATE_MIN=\${CRAWLER_RATE_MIN:-0.3}
-      - CRAWLER_RATE_MAX=\${CRAWLER_RATE_MAX:-0.8}
-      - PROXY_MODE=\${PROXY_MODE:-OFF}
-      - PROXY_URL=\${PROXY_URL:-}
-      - PROXY_POOL_API=\${PROXY_POOL_API:-}
-      - PROXY_POOL_LIST=\${PROXY_POOL_LIST:-}
-      - PROXY_ROTATION_STRATEGY=\${PROXY_ROTATION_STRATEGY:-rotate_on_error}
-      - PROXY_POOL_REFRESH_INTERVAL=\${PROXY_POOL_REFRESH_INTERVAL:-45}
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/db_115share
+      - REDIS_URL=redis://:redis123@redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
@@ -217,7 +214,7 @@ services:
       - 115_network
 
   worker:
-    image: \${DOCKER_IMAGE:-ghcr.io/your-username/115share-search}:\${IMAGE_TAG:-latest}
+    image: ghcr.io/minyoad/115share_searcher:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -226,19 +223,8 @@ services:
     command: python -m app.worker
     environment:
       - TZ=Asia/Shanghai
-      - DATABASE_URL=postgresql+asyncpg://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD:-postgres123}@postgres:5432/\${POSTGRES_DB:-db_115share}
-      - REDIS_URL=redis://:\${REDIS_PASSWORD:-redis123}@redis:6379/0
-      - CRAWLER_USER_AGENT=\${CRAWLER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
-      - CRAWLER_COOKIE=\${CRAWLER_COOKIE:-}
-      - CRAWLER_RATE_MIN=\${CRAWLER_RATE_MIN:-0.3}
-      - CRAWLER_RATE_MAX=\${CRAWLER_RATE_MAX:-0.8}
-      - PROXY_MODE=\${PROXY_MODE:-OFF}
-      - PROXY_URL=\${PROXY_URL:-}
-      - PROXY_POOL_API=\${PROXY_POOL_API:-}
-      - PROXY_POOL_LIST=\${PROXY_POOL_LIST:-}
-      - PROXY_ROTATION_STRATEGY=\${PROXY_ROTATION_STRATEGY:-rotate_on_error}
-      - PROXY_POOL_REFRESH_INTERVAL=\${PROXY_POOL_REFRESH_INTERVAL:-45}
-      - CONCURRENCY=\${WORKER_CONCURRENCY:-4}
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/db_115share
+      - REDIS_URL=redis://:redis123@redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
@@ -368,41 +354,17 @@ jobs:
           cache-to: type=gha,mode=max`
   },
   {
-    name: '.env.prod.example',
-    path: '.env.prod.example',
-    language: 'plaintext',
-    description: '生产环境安全配置模板 (数据库密码、Redis、镜像标签与反封禁代理配置)',
-    content: `# 镜像与版本
-DOCKER_IMAGE=ghcr.io/your-username/115share-search
-IMAGE_TAG=latest
+    name: 'DATABASE_CONFIG_AND_BATCH_GUIDE.md',
+    path: 'DATABASE_CONFIG_AND_BATCH_GUIDE.md',
+    language: 'markdown',
+    description: '全配置数据库持久化 (零 .env 运维) 与万级链接分批切片引擎使用说明指南',
+    content: `# 115 分享资源搜索服务：数据库持久化配置与大批量提交说明文档
 
-# PostgreSQL 生产配置
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_strong_postgres_password_here
-POSTGRES_DB=db_115share
-POSTGRES_PORT=5432
-
-# Redis 生产配置
-REDIS_PASSWORD=your_strong_redis_password_here
-REDIS_PORT=6379
-
-# FastAPI Web 服务
-API_PORT=8000
-API_WORKERS=4
-
-# 后台 Worker
-WORKER_CONCURRENCY=4
-CRAWLER_COOKIE=
-CRAWLER_RATE_MIN=0.3
-CRAWLER_RATE_MAX=0.8
-
-# 代理池配置
-PROXY_MODE=OFF
-PROXY_URL=
-PROXY_POOL_API=
-PROXY_POOL_LIST=
-PROXY_ROTATION_STRATEGY=rotate_on_error
-PROXY_POOL_REFRESH_INTERVAL=45`
+## 一、全配置项数据库持久化（彻底摆脱 .env 困扰）
+所有运行配置与管理凭证全面迁移至 PostgreSQL 数据库 system_settings 表中。
+1. 启动无需任何 .env 配置文件，直接 docker compose up -d 运行即可；
+2. 爬虫 Cookie、代理池、看门狗、Google AdSense、管理员密码均在 Web 管理后台直接修改并持久化；
+3. 修改后秒级热重载生效，容器重启或镜像升级数据完全不丢失。`
   },
   {
     name: 'Dockerfile',
@@ -504,8 +466,6 @@ class Settings(BaseSettings):
     CONCURRENCY: int = 4
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         extra="ignore"
     )
 

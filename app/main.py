@@ -1506,4 +1506,28 @@ async def reset_system_settings(
     }
 
 
+@app.get(
+    "/api/v1/public/adsense-config",
+    summary="获取公共 Google AdSense 商业化广告配置",
+)
+async def get_public_adsense_config(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    提供给前端公共页面（搜索页、目录树、详情页）加载 Google AdSense 脚本与广告单元。
+    无需管理员权限，仅返回非敏感的广告发布商 ID 及广告位配置。
+    """
+    mgr = DatabaseSettingsManager.get_instance()
+    # Ensure in-memory cache is populated from DB
+    await mgr.load_from_db(db)
+
+    return {
+        "enabled": bool(mgr.get("ADSENSE_ENABLED", settings.ADSENSE_ENABLED)),
+        "client_id": str(mgr.get("ADSENSE_CLIENT_ID", settings.ADSENSE_CLIENT_ID) or "").strip(),
+        "slot_id": str(mgr.get("ADSENSE_SLOT_ID", settings.ADSENSE_SLOT_ID) or "").strip(),
+        "auto_ads": bool(mgr.get("ADSENSE_AUTO_ADS", settings.ADSENSE_AUTO_ADS)),
+        "test_mode": bool(mgr.get("ADSENSE_TEST_MODE", settings.ADSENSE_TEST_MODE)),
+    }
+
+
 

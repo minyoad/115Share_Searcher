@@ -40,15 +40,6 @@ export const CodeExplorer: React.FC = () => {
 
       // Add Docker environment templates, dockerignore & init files
       zip.file('.dockerignore', `__pycache__\n*.pyc\n*.pyo\n*.pyd\n.git\n.gitignore\n.env\nnode_modules\ndist\nbuild\n`);
-      zip.file('.env.example', `POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres123
-POSTGRES_DB=db_115share
-POSTGRES_PORT=5432
-REDIS_PASSWORD=redis123
-REDIS_PORT=6379
-API_PORT=8000
-CRAWLER_COOKIE=
-`);
       zip.file('app/__init__.py', '"""115 Cloud Drive Share Search Service"""\n__version__ = "1.0.0"\n');
 
       const blob = await zip.generateAsync({ type: 'blob' });

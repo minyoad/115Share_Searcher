@@ -5,8 +5,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """
-    Application Configurations
-    Loads from environment variables or .env file
+    Application Core Configurations
+    Runtime connection settings (DATABASE_URL, REDIS_URL).
+    All operational business configurations (115 crawler, proxy pool, watchdog, 
+    adsense, admin auth) are dynamically loaded and persisted in PostgreSQL database
+    via system_settings table, eliminating any need for .env files.
     """
     PROJECT_NAME: str = "115 Share Search Service"
     PROJECT_VERSION: str = "1.0.0"
@@ -123,9 +126,29 @@ class Settings(BaseSettings):
         description="Proxy connection timeout in seconds"
     )
 
+    # Google AdSense 商业化广告系统接入配置
+    ADSENSE_ENABLED: bool = Field(
+        default=False,
+        description="Whether Google AdSense integration is enabled"
+    )
+    ADSENSE_CLIENT_ID: str = Field(
+        default="",
+        description="Google AdSense Publisher Client ID, e.g. ca-pub-1234567890123456"
+    )
+    ADSENSE_SLOT_ID: str = Field(
+        default="",
+        description="Optional Google AdSense Ad Slot ID for search and directory pages, e.g. 1234567890"
+    )
+    ADSENSE_AUTO_ADS: bool = Field(
+        default=True,
+        description="Whether Google AdSense Auto Ads (全自动广告) is enabled"
+    )
+    ADSENSE_TEST_MODE: bool = Field(
+        default=False,
+        description="Whether to run AdSense in test mode (data-adtest='on') to prevent invalid click penalties"
+    )
+
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         extra="ignore"
     )
 

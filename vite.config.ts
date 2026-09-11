@@ -99,6 +99,25 @@ function aistudioApiMockPlugin(): Plugin {
           res.end(JSON.stringify(data));
         };
 
+        const mockSettings: Record<string, any> = (globalThis as any).__mockSettings || {
+          CRAWLER_COOKIE: '',
+          CRAWLER_CONCURRENCY: 16,
+          CRAWLER_RATE_MIN: 0.15,
+          CRAWLER_RATE_MAX: 0.35,
+          CRAWLER_PAGE_SIZE: 100,
+          ADSENSE_ENABLED: false,
+          ADSENSE_CLIENT_ID: '',
+          ADSENSE_SLOT_ID: '',
+          ADSENSE_AUTO_ADS: true,
+          ADSENSE_TEST_MODE: false,
+          WORKER_CONCURRENCY: 4,
+          STUCK_TASK_CHECK_INTERVAL: 60,
+          STUCK_TASK_TIMEOUT_SECONDS: 300,
+          PROXY_MODE: 'OFF',
+          PROXY_URL: '',
+        };
+        (globalThis as any).__mockSettings = mockSettings;
+
         // 1. Admin Verification
         if (url === '/api/v1/admin/verify' && method === 'POST') {
           const body = await readJsonBody();
@@ -199,6 +218,104 @@ function aistudioApiMockPlugin(): Plugin {
             batches_processed: Math.ceil(distinctCodes.length / 100) || 1,
             task_ids: distinctCodes.slice(0, 50).map((c: any) => `task_${c}`),
             message: `已成功接收处理 ${totalSubmitted} 条链接（含 ${distinctCodes.length} 条唯一分享），已成功推入后台抓取队列 ${distinctCodes.length} 条。`
+          });
+        }
+
+        // 8. Public AdSense Config
+        if (url === '/api/v1/public/adsense-config' && method === 'GET') {
+          return sendJson(200, {
+            enabled: Boolean(mockSettings.ADSENSE_ENABLED),
+            client_id: String(mockSettings.ADSENSE_CLIENT_ID || '').trim(),
+            slot_id: String(mockSettings.ADSENSE_SLOT_ID || '').trim(),
+            auto_ads: Boolean(mockSettings.ADSENSE_AUTO_ADS !== false),
+            test_mode: Boolean(mockSettings.ADSENSE_TEST_MODE),
+          });
+        }
+
+        // 9. Admin Settings GET
+        if (url === '/api/v1/admin/settings' && method === 'GET') {
+          return sendJson(200, {
+            categories: [
+              {
+                id: 'crawler',
+                name: '115 爬虫与引擎频控',
+                items: [
+                  { key: 'CRAWLER_COOKIE', title: '115 账号凭据 (VIP Cookie)', description: '用于快照与递归抓取的 115 账号 Cookie', type: 'string', category: 'crawler', default: '', current: mockSettings.CRAWLER_COOKIE || '', is_modified: !!mockSettings.CRAWLER_COOKIE, sensitive: true },
+                  { key: 'CRAWLER_CONCURRENCY', title: '爬虫最大并发协程数', description: '限制爬虫并发请求 115 API 的最大 Worker 数量', type: 'int', category: 'crawler', default: 16, current: Number(mockSettings.CRAWLER_CONCURRENCY) || 16, is_modified: mockSettings.CRAWLER_CONCURRENCY !== 16, sensitive: false },
+                  { key: 'CRAWLER_RATE_MIN', title: '单节点极小请求间隔 (秒)', description: '避免请求过于频繁触发 405 封禁', type: 'float', category: 'crawler', default: 0.15, current: Number(mockSettings.CRAWLER_RATE_MIN) || 0.15, is_modified: mockSettings.CRAWLER_RATE_MIN !== 0.15, sensitive: false },
+                  { key: 'CRAWLER_RATE_MAX', title: '单节点极大请求间隔 (秒)', description: '随机延迟浮动区间上界', type: 'float', category: 'crawler', default: 0.35, current: Number(mockSettings.CRAWLER_RATE_MAX) || 0.35, is_modified: mockSettings.CRAWLER_RATE_MAX !== 0.35, sensitive: false },
+                  { key: 'CRAWLER_PAGE_SIZE', title: '单页拉取最大节点数量', description: 'snap API 每次拉取的目录/文件数量', type: 'int', category: 'crawler', default: 100, current: Number(mockSettings.CRAWLER_PAGE_SIZE) || 100, is_modified: mockSettings.CRAWLER_PAGE_SIZE !== 100, sensitive: false }
+                ]
+              },
+              {
+                id: 'adsense',
+                name: 'Google AdSense 商业化广告',
+                items: [
+                  { key: 'ADSENSE_ENABLED', title: '启用 Google AdSense', description: '总开关。开启后将在公共页面自动注入 AdSense 脚本并展示商业化广告位', type: 'bool', category: 'adsense', default: false, current: !!mockSettings.ADSENSE_ENABLED, is_modified: !!mockSettings.ADSENSE_ENABLED, sensitive: false },
+                  { key: 'ADSENSE_CLIENT_ID', title: 'AdSense 客户 ID (Publisher ID)', description: 'Google AdSense 发布商唯一标识，格式如 ca-pub-1234567890123456', type: 'string', category: 'adsense', default: '', current: mockSettings.ADSENSE_CLIENT_ID || '', is_modified: !!mockSettings.ADSENSE_CLIENT_ID, sensitive: false },
+                  { key: 'ADSENSE_SLOT_ID', title: '搜索与详情页广告单元 ID (Slot ID)', description: '可选。指定固定广告单元展示代码 (如 8912345678)，留空则仅使用 Auto Ads 自动广告', type: 'string', category: 'adsense', default: '', current: mockSettings.ADSENSE_SLOT_ID || '', is_modified: !!mockSettings.ADSENSE_SLOT_ID, sensitive: false },
+                  { key: 'ADSENSE_AUTO_ADS', title: '启用全自动广告 (Auto Ads)', description: '开启后 Google AI 算法将自动识别最佳版位并在页面合适位置呈现响应式广告', type: 'bool', category: 'adsense', default: true, current: mockSettings.ADSENSE_AUTO_ADS !== false, is_modified: mockSettings.ADSENSE_AUTO_ADS === false, sensitive: false },
+                  { key: 'ADSENSE_TEST_MODE', title: '测试广告模式 (Test Mode)', description: '开发或刚接入审核阶段建议开启 (data-adtest="on")，避免站长误点产生无效流量处罚', type: 'bool', category: 'adsense', default: false, current: !!mockSettings.ADSENSE_TEST_MODE, is_modified: !!mockSettings.ADSENSE_TEST_MODE, sensitive: false }
+                ]
+              },
+              {
+                id: 'worker',
+                name: '后台任务调度与看门狗',
+                items: [
+                  { key: 'WORKER_CONCURRENCY', title: '后台任务消费者并发数', description: '同时处理分享抓取的消费者进程/协程上限', type: 'int', category: 'worker', default: 4, current: Number(mockSettings.WORKER_CONCURRENCY) || 4, is_modified: mockSettings.WORKER_CONCURRENCY !== 4, sensitive: false },
+                  { key: 'STUCK_TASK_CHECK_INTERVAL', title: '死锁看门狗巡检周期 (秒)', description: '后台自动探测卡死或假死任务的检测间隔', type: 'int', category: 'worker', default: 60, current: Number(mockSettings.STUCK_TASK_CHECK_INTERVAL) || 60, is_modified: mockSettings.STUCK_TASK_CHECK_INTERVAL !== 60, sensitive: false },
+                  { key: 'STUCK_TASK_TIMEOUT_SECONDS', title: '任务僵死判定超时 (秒)', description: '超过此时间无进度的抓取任务将被自动释放并恢复', type: 'int', category: 'worker', default: 300, current: Number(mockSettings.STUCK_TASK_TIMEOUT_SECONDS) || 300, is_modified: mockSettings.STUCK_TASK_TIMEOUT_SECONDS !== 300, sensitive: false }
+                ]
+              },
+              {
+                id: 'proxy',
+                name: '代理池与网络中继',
+                items: [
+                  { key: 'PROXY_MODE', title: '代理模式', description: '可选值: OFF (直连), STATIC (单静态代理), POOL_API (动态提取), CUSTOM_LIST (列表)', type: 'string', category: 'proxy', default: 'OFF', current: mockSettings.PROXY_MODE || 'OFF', is_modified: mockSettings.PROXY_MODE !== 'OFF', sensitive: false },
+                  { key: 'PROXY_URL', title: '单个静态代理地址', description: '如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080', type: 'string', category: 'proxy', default: '', current: mockSettings.PROXY_URL || '', is_modified: !!mockSettings.PROXY_URL, sensitive: false }
+                ]
+              }
+            ],
+            total_count: 14
+          });
+        }
+
+        // 10. Admin Settings POST (Batch update)
+        if (url === '/api/v1/admin/settings' && method === 'POST') {
+          const body = await readJsonBody();
+          const incoming = body.settings || {};
+          Object.assign(mockSettings, incoming);
+          return sendJson(200, {
+            success: true,
+            updated_count: Object.keys(incoming).length,
+            applied_settings: incoming,
+            message: `成功保存并应用 ${Object.keys(incoming).length} 项系统配置至 PostgreSQL 数据库，已即刻生效！`
+          });
+        }
+
+        // 11. Admin Settings Reset
+        if (url === '/api/v1/admin/settings/reset' && method === 'POST') {
+          const body = await readJsonBody();
+          const keys = body.keys;
+          if (!keys || !keys.length) {
+            mockSettings.ADSENSE_ENABLED = false;
+            mockSettings.ADSENSE_CLIENT_ID = '';
+            mockSettings.ADSENSE_SLOT_ID = '';
+            mockSettings.ADSENSE_AUTO_ADS = true;
+            mockSettings.ADSENSE_TEST_MODE = false;
+          } else {
+            for (const k of keys) {
+              if (k in mockSettings) {
+                if (k.startsWith('ADSENSE_')) {
+                  mockSettings[k] = k === 'ADSENSE_AUTO_ADS';
+                }
+              }
+            }
+          }
+          return sendJson(200, {
+            success: true,
+            reset_count: keys ? keys.length : 14,
+            message: '成功将系统配置恢复为系统出厂默认值！'
           });
         }
 

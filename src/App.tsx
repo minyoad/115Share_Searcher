@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, 
   ListChecks, 
@@ -11,18 +11,18 @@ import {
   Database, 
   Server, 
   ShieldCheck, 
-  Sparkles,
-  ExternalLink,
-  HardDrive,
-  Menu,
-  X,
-  SlidersHorizontal,
-  ChevronRight,
-  Lock,
-  Unlock,
-  LogOut,
-  Key,
-  ShieldAlert
+  Sparkles, 
+  ExternalLink, 
+  HardDrive, 
+  Menu, 
+  X, 
+  SlidersHorizontal, 
+  ChevronRight, 
+  Lock, 
+  Unlock, 
+  LogOut, 
+  Key, 
+  ShieldAlert 
 } from 'lucide-react';
 import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
 import { SearchEngineView } from './components/SearchEngineView';
@@ -36,7 +36,7 @@ import { ProxyManagerView } from './components/ProxyManagerView';
 import { SystemSettingsView } from './components/SystemSettingsView';
 import { AdminAuthModal } from './components/AdminAuthModal';
 import { AdminConsoleBar } from './components/AdminConsoleBar';
-import { ActiveTab, FileRecord, ShareRecord } from './types';
+import { ActiveTab, FileRecord, ShareRecord, AdSenseConfig } from './types';
 
 const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy', 'settings'];
 
@@ -49,6 +49,35 @@ export default function App() {
   const [treeHighlightId, setTreeHighlightId] = useState<string>('');
   const [toastMsg, setToastMsg] = useState<string>('');
   const [mobileMoreOpen, setMobileMoreOpen] = useState<boolean>(false);
+
+  // Google AdSense Commercial Integration State
+  const [adsenseConfig, setAdSenseConfig] = useState<AdSenseConfig | null>(() => {
+    try {
+      const saved = localStorage.getItem('115_adsense_config');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const fetchAdSenseConfig = async () => {
+    try {
+      const res = await fetch('/api/v1/public/adsense-config');
+      if (res.ok) {
+        const data = await res.json();
+        setAdSenseConfig(data);
+        try {
+          localStorage.setItem('115_adsense_config', JSON.stringify(data));
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('Failed to load AdSense config:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchAdSenseConfig();
+  }, []);
 
   // Admin Authorization State
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
@@ -519,7 +548,12 @@ export default function App() {
               
               {activeTab === 'proxy' && <ProxyManagerView />}
 
-              {activeTab === 'settings' && <SystemSettingsView onShowToast={showToast} />}
+              {activeTab === 'settings' && (
+                <SystemSettingsView 
+                  onShowToast={showToast} 
+                  onSettingsSaved={fetchAdSenseConfig} 
+                />
+              )}
             </>
           ) : (
             /* Admin Gate Card for unauthenticated direct visitors */
@@ -558,6 +592,7 @@ export default function App() {
             onOpenTree={handleOpenTree}
             onReportShare={handleReportShare}
             onDeleteShare={handleDeleteShare}
+            adsenseConfig={adsenseConfig}
           />
         )}
 
