@@ -116,24 +116,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files directory if exists
+# ------------------------------------------------------------------------------
+# Frontend SPA & Static Files Serving
+# Prioritizes modern React 18 + Tailwind + Lucide frontend (dist), identical to AI Studio preview
+# ------------------------------------------------------------------------------
+def _locate_frontend_dist() -> Optional[str]:
+    """Search for compiled React frontend dist directory across common paths"""
+    search_paths = [
+        os.path.join(os.path.dirname(__file__), "dist"),                      # app/dist
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist"),     # <root>/dist
+        os.path.join(os.getcwd(), "dist"),                                    # ./dist
+        "/app/dist",                                                          # Docker container /app/dist
+    ]
+    for path in search_paths:
+        if os.path.isdir(path) and os.path.isfile(os.path.join(path, "index.html")):
+            return path
+    return None
+
+frontend_dist = _locate_frontend_dist()
 static_dir = os.path.join(os.path.dirname(__file__), "static")
+
+# Mount React compiled assets (/assets)
+if frontend_dist:
+    assets_dir = os.path.join(frontend_dist, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="react_assets")
+        logger.info(f"Mounted React production assets from: {assets_dir}")
+
+# Mount static files directory if exists (for backwards compatibility & userscripts)
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
-    """Serve the static single-page search web frontend"""
+    """
+    Serve the production single-page search web frontend.
+    Prioritizes modern React SPA frontend (dist/index.html), falling back to static/index.html.
+    """
+    if frontend_dist:
+        react_index = os.path.join(frontend_dist, "index.html")
+        if os.path.isfile(react_index):
+            return FileResponse(react_index)
+
     index_file = os.path.join(static_dir, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
+
     return HTMLResponse("<h1>115 Share Search Service API is running.</h1><p>Visit /docs for Swagger UI</p>")
 
 
 @app.get("/115-cid-helper.user.js")
 async def serve_cid_helper_script():
     """Direct install route for the Tampermonkey CID helper userscript"""
+    if frontend_dist:
+        dist_script = os.path.join(frontend_dist, "115-cid-helper.user.js")
+        if os.path.exists(dist_script):
+            return FileResponse(dist_script, media_type="application/javascript; charset=utf-8")
     script_file = os.path.join(static_dir, "115-cid-helper.user.js")
     if os.path.exists(script_file):
         return FileResponse(script_file, media_type="application/javascript; charset=utf-8")
@@ -1528,6 +1567,39 @@ async def get_public_adsense_config(
         "auto_ads": bool(mgr.get("ADSENSE_AUTO_ADS", settings.ADSENSE_AUTO_ADS)),
         "test_mode": bool(mgr.get("ADSENSE_TEST_MODE", settings.ADSENSE_TEST_MODE)),
     }
+
+
+# ------------------------------------------------------------------------------
+# SPA Catch-all Route for client-side routing & static asset fallback
+# ------------------------------------------------------------------------------
+@app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
+async def serve_spa_fallback(full_path: str):
+    """
+    Catch-all route to serve the React SPA for client-side routing.
+    Excludes API (/api/), WebSocket (/ws/), OpenAPI documentation, and assets.
+    """
+    reserved_prefixes = ("api/", "ws/", "docs", "redoc", "openapi.json", "static/", "assets/")
+    if any(full_path.startswith(prefix) for prefix in reserved_prefixes):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # If it's a specific static file inside dist, return it directly
+    if frontend_dist:
+        direct_file = os.path.join(frontend_dist, full_path)
+        if os.path.isfile(direct_file):
+            return FileResponse(direct_file)
+
+        # Fallback to SPA root HTML
+        spa_index = os.path.join(frontend_dist, "index.html")
+        if os.path.isfile(spa_index):
+            return FileResponse(spa_index)
+
+    # Secondary fallback to app/static
+    fallback_index = os.path.join(static_dir, "index.html")
+    if os.path.isfile(fallback_index):
+        return FileResponse(fallback_index)
+
+    raise HTTPException(status_code=404, detail="Frontend Not Found")
+
 
 
 

@@ -53,6 +53,10 @@
 
 本系统已彻底移除传统的 `.env` 配置文件依赖。所有业务参数（115 VIP Cookie、爬虫并发度、频控速率、代理池、自动看门狗、Google AdSense、管理员密码）全部通过 **PostgreSQL 数据库 `system_settings` 表** 持久化保存，并通过 Web 管理后台直接热修改与热重载。
 
+> **💡 前后端一致性保证 (100% 还原 AI Studio 预览体验)**：
+> - 镜像采用 **多阶段构建 (Multi-Stage Dockerfile)**：第一阶段使用 Node 20 自动编译现代 React 18 + Tailwind CSS + Lucide 交互前端，第二阶段由 FastAPI 嵌入托管，确保生产环境、Docker 部署与 AI Studio 预览界面完全一致（包含代理池防封矩阵、实时探活诊断、WebSocket 任务监控流等）。
+> - 仓库内已同步内置预编译的 `/dist` 与 `app/dist` 产物，即使在无 Node.js 环境的纯 Python 机器直接启动 `uvicorn app.main:app`，也能直接加载现代 React 界面。
+
 ### 方式 1：生产环境部署 (`docker-compose.prod.yml`)
 
 无需创建或配置任何 `.env` 文件，直接执行命令拉起全套生产容器：

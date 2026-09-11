@@ -6,7 +6,6 @@ __pycache__
 .gitignore
 .env
 node_modules
-dist
 build
 .pytest_cache
 .DS_Store

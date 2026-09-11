@@ -370,15 +370,40 @@ jobs:
     name: 'Dockerfile',
     path: 'Dockerfile',
     language: 'dockerfile',
-    description: 'Python 3.11-slim 基础镜像与生产环境依赖打包',
-    content: `FROM python:3.11-slim
+    description: '多阶段生产镜像打包 (Stage 1 自动编译 React 前端，Stage 2 FastAPI 嵌入运行)',
+    content: `# ==============================================================================
+# Multi-Stage Dockerfile for 115 Share Search Service
+# Stage 1: Build modern React 18 + Tailwind + Lucide frontend
+# Stage 2: Python 3.11-slim FastAPI backend + Embedded React SPA
+# ==============================================================================
 
+# ------------------------------------------------------------------------------
+# Stage 1: Frontend Build Environment
+# ------------------------------------------------------------------------------
+FROM node:20-alpine AS frontend-builder
+WORKDIR /build
+
+# Copy dependency specifications and install
+COPY package.json bun.lock* ./
+RUN npm install
+
+# Copy frontend source code and compile production SPA into /build/dist
+COPY . .
+RUN npm run build
+
+# ------------------------------------------------------------------------------
+# Stage 2: Python 3.11 Production Runtime
+# ------------------------------------------------------------------------------
+FROM python:3.11-slim
+
+# Prevent Python from writing .pyc files & enable unbuffered logs
 ENV PYTHONDONTWRITEBYTECODE=1 \\
     PYTHONUNBUFFERED=1 \\
     TZ=Asia/Shanghai
 
 WORKDIR /app
 
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     build-essential \\
     libpq-dev \\
@@ -386,13 +411,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     tzdata \\
     && rm -rf /var/lib/apt/lists/*
 
+# Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application source code
 COPY . .
 
+# Copy compiled React frontend assets from Stage 1 into /app/dist
+# This guarantees actual Docker deployments look 100% identical to AI Studio preview!
+COPY --from=frontend-builder /build/dist /app/dist
+
+# Expose API port
 EXPOSE 8000
 
+# Default entrypoint for web API service
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]`
   },
   {
@@ -1293,13 +1326,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.PROJECT_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+def _locate_frontend_dist() -> Optional[str]:
+    for p in [os.path.join(os.path.dirname(__file__), "dist"), os.path.join(os.path.dirname(os.path.dirname(__file__)), "dist"), "/app/dist"]:
+        if os.path.isdir(p) and os.path.isfile(os.path.join(p, "index.html")):
+            return p
+    return None
+
+frontend_dist = _locate_frontend_dist()
 static_dir = os.path.join(os.path.dirname(__file__), "static")
+if frontend_dist and os.path.isdir(os.path.join(frontend_dist, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="react_assets")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
+    if frontend_dist and os.path.isfile(os.path.join(frontend_dist, "index.html")):
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
     index_file = os.path.join(static_dir, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
