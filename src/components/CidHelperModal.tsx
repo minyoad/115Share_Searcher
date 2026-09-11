@@ -250,7 +250,7 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
                 ⚠️ 为什么 115 官方网页无法直接跳到指定 CID 目录？
               </p>
               <p>
-                115 官方分享前端页面（<code className="font-mono bg-amber-100/80 px-1 py-0.5 rounded">115.com/s/*</code>）采用客户端单页架构，<strong>官方源码硬编码首次加载只请求根目录 (<code className="font-mono">cid=0</code>)</strong>，并没有监听 URL Hash 中的 <code className="font-mono">#cid=</code> 参数；且输入提取码验证后，官方页面会清空状态刷新根目录。这是 115 官方网站自身的设计限制。
+                115 官方分享页面默认打开只会展示分享顶层根目录，且输入提取码验证后会刷新重置，无法直接通过网页链接定位到层级内部的深层子文件夹。这是 115 官方网站自身的设计机制。
               </p>
             </div>
           </div>
@@ -266,7 +266,7 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              本搜索服务已将整个分享的目录结构完整建立索引！在搜索结果中点击<strong>「直达所在目录」</strong>，系统可<strong>毫秒级直接展开该文件所在的多级子目录</strong>，精准高亮目标文件，并支持复制绝对路径、快速切换上级目录或复制 AList / OpenList 挂载参数。
+              本搜索服务已将整个分享的目录结构完整建立索引！在搜索结果中点击<strong>「直达所在目录」</strong>，系统可<strong>直接展开该文件所在的多级子目录</strong>，精准高亮目标文件，并支持复制完整路径、快速切换上级目录。
             </p>
             {onNavigateToTree && (
               <button
@@ -286,10 +286,10 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
           <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-200/80 space-y-3">
             <div className="flex items-center justify-between">
               <span className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-900 uppercase tracking-wide">
-                <Sparkles className="w-4 h-4 text-indigo-600" /> 方案二：安装「115 官方直达 & 自动免密」油猴脚本 (v1.2.0 增强版)
+                <Sparkles className="w-4 h-4 text-indigo-600" /> 方案二：安装「115 官方直达 & 自动免密」油猴脚本
               </span>
               <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[11px] font-semibold">
-                终极官方直达
+                官方直达
               </span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
@@ -299,19 +299,19 @@ export const CidHelperModal: React.FC<CidHelperModalProps> = ({
             <ul className="text-xs space-y-2 text-slate-700 bg-white p-3 rounded-lg border border-indigo-100">
               <li className="flex items-start gap-2">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span><strong>网络级直接免密注入（核心）</strong>：拦截 115 首次目录请求并自动将密码塞入 <code className="font-mono bg-slate-100 px-1 rounded">receive_code</code>，官方服务端直接校验通过，最大限度跳过密码弹窗！</span>
+                <span><strong>自动免密填码</strong>：访问 115 官方页面时自动填入提取码并验证，省去手动输入的繁琐步骤！</span>
               </li>
               <li className="flex items-start gap-2">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span><strong>React 兼容自动填密 & 点击跳过</strong>：深度兼容 115 最新 Next.js/React 状态注入机制，自动填入提取码、触发回车并自动点击「提取文件」按钮，自动移除残留遮罩层！</span>
+                <span><strong>自动点击提取</strong>：智能识别提取弹窗并自动完成确认，快速进入文件列表。</span>
               </li>
               <li className="flex items-start gap-2">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span><strong>自动重定向至目标 CID</strong>：在请求层动态将 <code className="font-mono bg-slate-100 px-1 rounded">cid=0</code> 替换为目标 CID，115 页面直接渲染该子文件夹！</span>
+                <span><strong>直达指定文件夹</strong>：自动切换至您在搜索结果中点击的目标子文件夹，无需逐层手动翻找！</span>
               </li>
               <li className="flex items-start gap-2">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span><strong>悬浮快捷控制台</strong>：115 页面右下角常驻悬浮卡片，支持「⚡ 一键跳过密码 / 强制进入」，任何异常情况一键脱困。</span>
+                <span><strong>快捷控制浮窗</strong>：115 页面右下角常驻便捷控制台，支持一键跳过密码与快捷直达。</span>
               </li>
             </ul>
 

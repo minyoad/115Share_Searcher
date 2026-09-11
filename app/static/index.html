@@ -23,7 +23,7 @@
         </div>
         <div>
           <h1 class="text-xl font-bold text-slate-900">115 分享资源搜索服务</h1>
-          <p class="text-xs text-slate-500">毫秒级全文检索 · 树形层级索引 · 挂载 CID 映射</p>
+          <p class="text-xs text-slate-500">海量网盘资源一站式搜索 · 支持层级目录浏览与直接提取</p>
         </div>
       </div>
       <div class="flex items-center space-x-2 sm:space-x-3">
@@ -270,17 +270,17 @@
           </button>
         </div>
 
-        <!-- CID Jump & Tampermonkey Notice Banner -->
+        <!-- CID Jump & Notice Banner -->
         <div class="mb-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 border border-blue-200/80 rounded-xl p-3 sm:p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs shadow-2xs">
           <div class="flex items-start gap-2.5">
             <span class="text-base shrink-0">🧩</span>
             <div class="space-y-0.5 text-slate-700">
               <p class="font-bold text-slate-900 flex items-center gap-1.5">
-                <span>为什么 115 官方链接会先要求输入密码且停留在根目录？</span>
-                <span class="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">官方限制</span>
+                <span>为什么打开 115 官方链接时会停留在根目录？</span>
+                <span class="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">使用提示</span>
               </p>
               <p class="text-[11px] text-slate-600 leading-relaxed">
-                115 官方分享网页为 SPA 架构，源码强制默认只请求 <code class="bg-slate-200/80 px-1 rounded font-mono">cid=0</code> 且验密后刷新重置。推荐使用本站<strong>「直达所在目录」</strong>毫秒展开，或安装<strong>「115 油猴直达助手」</strong>实现官方网页自动免密+跳转目标目录！
+                115 官方网页由于机制限制，默认停留在根目录且验证提取码后会自动刷新重置。推荐直接使用本站<strong>「直达所在目录」</strong>展开多层文件夹，或使用<strong>「115 直达助手」</strong>实现官方网页免密并直接进入目标目录！
               </p>
             </div>
           </div>
@@ -288,7 +288,7 @@
             @click="showCidHelperModal = true"
             class="self-start sm:self-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 text-xs active:scale-95"
           >
-            <span>查看油猴脚本 / 解决方案</span>
+            <span>查看解决方案</span>
           </button>
         </div>
 

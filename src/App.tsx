@@ -453,12 +453,9 @@ export default function App() {
               <div>
                 <h1 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-1.5">
                   115 分享资源搜索服务
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                    FastAPI + PostgreSQL
-                  </span>
                 </h1>
                 <p className="text-[11px] text-slate-500 hidden sm:block">
-                  递归爬取 · BFS 目录树 · pg_trgm 全文检索 · OpenList/AList 节点映射
+                  海量网盘资源一站式搜索 · 支持层级目录浏览与直接提取
                 </p>
               </div>
             </div>
@@ -491,31 +488,20 @@ export default function App() {
                 层级目录
               </button>
 
-              <button
-                id="nav-code-tab"
-                onClick={() => setActiveTab('code')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'code'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <FileCode className="w-3.5 h-3.5" />
-                项目源码
-              </button>
-
-              <button
-                id="nav-api-tab"
-                onClick={() => setActiveTab('api')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
-                  activeTab === 'api'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                REST API
-              </button>
+              {isAdmin && (
+                <button
+                  id="nav-api-tab"
+                  onClick={() => setActiveTab('api')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                    activeTab === 'api'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  REST API
+                </button>
+              )}
 
               {/* Admin Entrance / Console Navigation Button */}
               {!isAdmin ? (
@@ -710,24 +696,24 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'code' && <CodeExplorer />}
+        {activeTab === 'code' && isAdmin && <CodeExplorer />}
 
-        {activeTab === 'api' && <ApiTester />}
+        {activeTab === 'api' && isAdmin && <ApiTester />}
       </main>
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-5 text-xs text-slate-500 mt-auto pb-20 md:pb-5">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
           <div className="flex items-center gap-2 flex-wrap justify-center sm:justify-start">
-            <span className="font-semibold text-slate-700">115 Share Search Service</span>
+            <span className="font-semibold text-slate-700">115 分享资源搜索服务</span>
             <span>·</span>
-            <span>Python 3.11 + FastAPI + PostgreSQL (pg_trgm)</span>
+            <span>海量网盘资源一站式极速检索与目录浏览</span>
           </div>
 
           <div className="flex items-center gap-3 text-slate-400 text-[11px]">
-            <span>BFS 遍历</span>
+            <span>极速检索</span>
             <span>·</span>
-            <span>OpenList / AList 节点兼容</span>
+            <span>层级目录直达</span>
             <span>·</span>
             <button 
               onClick={() => handleOpenAdmin('tasks')}
@@ -793,25 +779,13 @@ export default function App() {
             </button>
           </>
         ) : (
-          <>
-            <button
-              onClick={() => setActiveTab('code')}
-              className={`flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 ${
-                activeTab === 'code' ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <FileCode className={`w-5 h-5 ${activeTab === 'code' ? 'stroke-[2.5]' : 'stroke-[1.75]'}`} />
-              <span>源码</span>
-            </button>
-
-            <button
-              onClick={() => handleOpenAdmin('tasks')}
-              className="flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 text-slate-500 hover:text-blue-600"
-            >
-              <Lock className="w-5 h-5 stroke-[1.75] text-slate-400" />
-              <span>管理</span>
-            </button>
-          </>
+          <button
+            onClick={() => handleOpenAdmin('tasks')}
+            className="flex-1 py-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition min-h-[46px] active:scale-95 text-slate-500 hover:text-blue-600"
+          >
+            <Lock className="w-5 h-5 stroke-[1.75] text-slate-400" />
+            <span>管理</span>
+          </button>
         )}
 
         <button
@@ -957,35 +931,30 @@ export default function App() {
               </div>
             )}
 
-            {/* Public Development Tools */}
-            <div>
-              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                公开工程与文档
-              </h4>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  onClick={() => { setActiveTab('code'); setMobileMoreOpen(false); }}
-                  className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
-                    activeTab === 'code' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                  }`}
-                >
-                  <FileCode className="w-4 h-4 text-emerald-600" />
-                  <span className="text-xs font-bold">项目完整源码</span>
-                  <span className="text-[10px] text-slate-400">FastAPI/Worker/Crawler</span>
-                </button>
-
-                <button
-                  onClick={() => { setActiveTab('api'); setMobileMoreOpen(false); }}
-                  className={`p-3 rounded-xl border flex flex-col items-start gap-1.5 text-left transition ${
-                    activeTab === 'api' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                  }`}
-                >
-                  <BookOpen className="w-4 h-4 text-amber-600" />
-                  <span className="text-xs font-bold">RESTful API 调试</span>
-                  <span className="text-[10px] text-slate-400">Swagger 交互式请求</span>
-                </button>
+            {/* Admin Developer Tools */}
+            {isAdmin && (
+              <div>
+                <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                  接口调试
+                </h4>
+                <div className="grid grid-cols-1 gap-2.5">
+                  <button
+                    onClick={() => { setActiveTab('api'); setMobileMoreOpen(false); }}
+                    className={`p-3 rounded-xl border flex items-center justify-between transition ${
+                      activeTab === 'api' ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <BookOpen className="w-4 h-4 text-amber-600" />
+                      <div className="text-left">
+                        <span className="text-xs font-bold block">RESTful API 调试</span>
+                        <span className="text-[10px] text-slate-400 block">Swagger 交互式请求</span>
+                      </div>
+                    </div>
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}

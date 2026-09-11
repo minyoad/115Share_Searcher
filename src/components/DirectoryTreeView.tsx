@@ -343,7 +343,7 @@ export const DirectoryTreeView: React.FC<DirectoryTreeViewProps> = ({
               115 分享目录层级树
             </h2>
             <p className="text-[11px] text-slate-500 hidden sm:block">
-              支持按 CID 精确直达目录、多级树状展开、AList/OpenList 挂载节点提取
+              多级树状展开 · 快速切换上级 · 完整路径预览与直达提取
             </p>
           </div>
         </div>

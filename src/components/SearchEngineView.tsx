@@ -567,17 +567,8 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-slate-500 px-1">
         <span className="flex items-center gap-1.5 flex-wrap">
           <Database className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-          {isBackendConnected ? (
-            <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              PostgreSQL 实时索引检索
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-slate-700 font-medium bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-              本地检索模式
-            </span>
-          )}
-          <span>· 当前匹配: <strong className="text-blue-600 font-bold">{totalCount}</strong> 条</span>
+          <span>资源搜索结果</span>
+          <span>· 共匹配: <strong className="text-blue-600 font-bold">{totalCount}</strong> 条</span>
           {isSearchingBackend && (
             <span className="flex items-center gap-1 text-slate-400">
               <RotateCw className="w-3 h-3 animate-spin text-blue-500" />
@@ -590,11 +581,11 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 hover:underline transition self-start sm:self-auto"
         >
           <Puzzle className="w-3.5 h-3.5" />
-          <span>115 官方链接直达助手 (油猴免密脚本)</span>
+          <span>115 官方链接直达助手 (免密脚本)</span>
         </button>
       </div>
 
-      {/* CID Jump & Tampermonkey Notice Banner */}
+      {/* CID Jump & Notice Banner */}
       <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 border border-blue-200/80 rounded-xl p-3 sm:p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs shadow-2xs">
         <div className="flex items-start gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
@@ -602,11 +593,11 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           </div>
           <div className="space-y-0.5 text-slate-700">
             <p className="font-bold text-slate-900 flex items-center gap-1.5">
-              <span>为什么 115 官方链接会先要求输入密码且停留在根目录？</span>
-              <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">官方限制</span>
+              <span>为什么打开 115 官方链接时会停留在根目录？</span>
+              <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">使用提示</span>
             </p>
             <p className="text-[11px] text-slate-600 leading-relaxed">
-              115 官方分享网页为 SPA 架构，源码强制默认只请求 <code className="bg-slate-200/80 px-1 rounded font-mono">cid=0</code> 且验密后刷新重置。推荐使用本站<strong>「直达所在目录」</strong>毫秒展开，或安装<strong>「115 油猴直达助手」</strong>实现官方网页自动免密+跳转目标目录！
+              115 官方网页由于机制限制，默认停留在根目录且验证提取码后会自动刷新重置。推荐直接使用本站<strong>「直达所在目录」</strong>展开多层文件夹，或使用<strong>「115 直达助手」</strong>实现官方网页免密并直接进入目标目录！
             </p>
           </div>
         </div>
@@ -614,7 +605,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           onClick={() => setIsCidHelperOpen(true)}
           className="self-start sm:self-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 text-xs active:scale-95 cursor-pointer"
         >
-          <span>查看油猴脚本 / 解决方案</span>
+          <span>查看解决方案</span>
         </button>
       </div>
 
@@ -712,7 +703,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
                           type="button"
                           onClick={() => setIsCidHelperOpen(true)}
                           className="text-[10px] text-slate-400 hover:text-blue-600 flex items-center gap-0.5 mt-1 transition"
-                          title="115 官方网页默认无视 CID 且验密后刷新根目录。点击了解如何使用油猴脚本自动免密直达！"
+                          title="115 官方页面默认停留在顶层。点击了解如何免密直达目标目录！"
                         >
                           <HelpCircle className="w-3 h-3" />
                           <span>官方跳根目录？</span>
@@ -724,7 +715,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
                       <button
                         onClick={() => handleCopyNodeId(item.file_115_id)}
                         className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium rounded-lg transition flex items-center gap-1 min-h-[36px] active:scale-95"
-                        title="复制 115 节点 ID (FID/CID) 用于 AList / OpenList 挂载"
+                        title="复制 115 资源节点 ID"
                       >
                         {copiedId === item.file_115_id ? <Check className="w-3 h-3 text-emerald-600" /> : <Hash className="w-3 h-3 text-slate-400" />}
                         {copiedId === item.file_115_id ? '已复制' : '复制ID'}
@@ -734,7 +725,7 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
                       <button
                         onClick={() => onOpenTree(item.share_code, targetCid, item.file_115_id)}
                         className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold rounded-lg transition flex items-center gap-1 min-h-[36px] active:scale-95 border border-indigo-100 shadow-2xs"
-                        title={item.is_dir ? `进入该文件夹 (CID: ${item.file_115_id})` : `定位到所在父目录 (CID: ${targetCid}) 并高亮该文件`}
+                        title={item.is_dir ? '进入该文件夹' : '定位到所在父目录并高亮该文件'}
                       >
                         <FolderOpen className="w-3.5 h-3.5 text-indigo-600" />
                         <span>{item.is_dir ? '进入该目录' : '直达所在目录'}</span>
