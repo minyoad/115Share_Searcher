@@ -648,18 +648,27 @@ async def export_shares_config(
 
 
 @app.post(
-    "/api/v1/shares/seed-demo",
-    summary="一键初始化/载入示例分享与文件树数据",
+    "/api/v1/shares/clean-all",
+    summary="一键彻底清空所有分享任务与文件记录（危险初始化重置）",
 )
-async def seed_demo_shares():
+async def clean_all_shares(db: AsyncSession = Depends(get_db)):
     """
-    一键载入初始示例 115 分享资源（4K 原盘、计算机经典图书、无损音乐精选），
-    快速恢复/初始化任务列表与搜索索引。
+    彻底清空数据库内所有的分享任务和文件记录，恢复崭新的空白数据库
     """
-    from app.seed import seed_initial_demo_data
-    res = await seed_initial_demo_data(force=True)
+    file_count = (await db.execute(select(func.count(File.id)))).scalar() or 0
+    share_count = (await db.execute(select(func.count(Share.id)))).scalar() or 0
+    await db.execute(delete(File))
+    await db.execute(delete(Share))
+    await db.commit()
+
+    logger.info(f"[clean_all_shares] Wiped all {share_count} shares and {file_count} files from database.")
     await TaskWebSocketManager.get_instance().broadcast_full_update()
-    return res
+    return {
+        "status": "ok",
+        "message": f"已彻底清空全部 {share_count} 条分享任务及 {file_count} 个文件记录！",
+        "deleted_shares": share_count,
+        "deleted_files": file_count,
+    }
 
 
 @app.post(
@@ -925,10 +934,11 @@ async def search_resources(
 async def list_share_directory(
     share_code: str,
     parent_115_id: str = Query("0", description="父级目录 115 CID (根目录为 0)"),
+    all_files: bool = Query(False, description="是否返回全量文件树"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    按目录层级 (CID) 浏览指定 115 分享内的子文件夹与文件
+    按目录层级 (CID) 浏览指定 115 分享内的子文件夹与文件，支持 all_files=true 获取全树
     """
     stmt = select(Share).where(Share.share_code == share_code)
     share_res = await db.execute(stmt)
@@ -982,14 +992,22 @@ async def list_share_directory(
             for ancestor in reversed(chain):
                 breadcrumbs.append(ancestor)
 
-    files_stmt = (
-        select(File)
-        .where(
-            File.share_id == share_obj.id,
-            File.parent_115_id == parent_115_id
+    if all_files:
+        files_stmt = (
+            select(File)
+            .where(File.share_id == share_obj.id)
+            .order_by(File.is_dir.desc(), File.name.asc())
+            .limit(10000)
         )
-        .order_by(File.is_dir.desc(), File.name.asc())
-    )
+    else:
+        files_stmt = (
+            select(File)
+            .where(
+                File.share_id == share_obj.id,
+                File.parent_115_id == parent_115_id
+            )
+            .order_by(File.is_dir.desc(), File.name.asc())
+        )
     file_rows = (await db.execute(files_stmt)).scalars().all()
 
     folder_count = 0

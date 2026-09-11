@@ -52,6 +52,8 @@ export const DirectoryTreeView: React.FC<DirectoryTreeViewProps> = ({
   const [viewMode, setViewMode] = useState<'tree' | 'folder'>('tree');
   const [filterKw, setFilterKw] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [fetchedFiles, setFetchedFiles] = useState<FileRecord[]>([]);
+  const [loadingFiles, setLoadingFiles] = useState<boolean>(false);
 
   // Initialize expanded folders
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
@@ -59,9 +61,55 @@ export const DirectoryTreeView: React.FC<DirectoryTreeViewProps> = ({
   });
 
   const activeShare = shares.find(s => s.share_code === selectedShareCode);
+
+  useEffect(() => {
+    if (!selectedShareCode) return;
+    let isMounted = true;
+    setLoadingFiles(true);
+
+    fetch(`/api/v1/shares/${encodeURIComponent(selectedShareCode)}/files?all_files=true`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!isMounted) return;
+        if (data && data.items && Array.isArray(data.items)) {
+          const mapped: FileRecord[] = data.items.map((item: any) => ({
+            id: item.id,
+            share_id: activeShare?.id || 0,
+            file_115_id: item.file_115_id,
+            parent_115_id: item.parent_115_id,
+            name: item.name,
+            extension: item.extension || '',
+            size: item.size || 0,
+            is_dir: item.is_dir,
+            sha1: item.sha1 || '',
+            full_path: item.full_path,
+            share_code: selectedShareCode,
+            receive_code: activeShare?.receive_code || '',
+            share_title: activeShare?.title || '',
+          }));
+          setFetchedFiles(mapped);
+        } else {
+          setFetchedFiles([]);
+        }
+      })
+      .catch(() => {
+        if (isMounted) setFetchedFiles([]);
+      })
+      .finally(() => {
+        if (isMounted) setLoadingFiles(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedShareCode, activeShare?.id, activeShare?.receive_code, activeShare?.title]);
+
   const shareFiles = useMemo(() => {
+    if (fetchedFiles.length > 0) {
+      return fetchedFiles;
+    }
     return files.filter(f => f.share_code === selectedShareCode);
-  }, [files, selectedShareCode]);
+  }, [files, selectedShareCode, fetchedFiles]);
 
   // Synchronize when initial props change
   useEffect(() => {

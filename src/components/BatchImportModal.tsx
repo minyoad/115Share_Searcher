@@ -51,9 +51,7 @@ function parseLine(line: string) {
 }
 
 export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [], onImportSuccess, onNavigateToTasks }) => {
-  const [inputText, setInputText] = useState(
-    `https://115cdn.com/s/swnsdrk3h2m?password=p783\nhttps://115cdn.com/s/sw6tcot3hbe?password=e9d7\nhttps://115.com/s/sw34kcyberpunk?password=cp77`
-  );
+  const [inputText, setInputText] = useState('');
   const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [successLogs, setSuccessLogs] = useState<string[]>([]);
@@ -170,65 +168,17 @@ export const ImporterView: React.FC<ImporterViewProps> = ({ existingShares = [],
           const newShare: ShareRecord = {
             id: mockShareId,
             share_code: item.shareCode,
-            receive_code: item.receiveCode,
-            title: `115 分享资源包 (${item.shareCode})`,
-            file_count: 3,
-            folder_count: 1,
-            total_size: 42949672960,
+            receive_code: item.receiveCode || '',
+            title: `115 分享 (${item.shareCode})`,
+            file_count: 0,
+            folder_count: 0,
+            total_size: 0,
             status: 0, // 0 = 抓取中 / 待开始
             created_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
-            last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
+            last_crawled_at: undefined,
           };
 
-          const newFiles: FileRecord[] = [
-            {
-              id: mockShareId * 10 + 1,
-              share_id: mockShareId,
-              file_115_id: `cid_${mockShareId}`,
-              parent_115_id: '0',
-              name: `资源核心合集_${item.shareCode}`,
-              extension: '',
-              size: 0,
-              is_dir: true,
-              sha1: '',
-              full_path: `/${newShare.title}`,
-              share_code: item.shareCode,
-              receive_code: item.receiveCode,
-              share_title: newShare.title,
-            },
-            {
-              id: mockShareId * 10 + 2,
-              share_id: mockShareId,
-              file_115_id: `fid_${mockShareId}_1`,
-              parent_115_id: `cid_${mockShareId}`,
-              name: `高清电影_4K_HDR_${item.shareCode}.mkv`,
-              extension: 'mkv',
-              size: 21474836480,
-              is_dir: false,
-              sha1: 'a89c72e918237498172938471928374619283746',
-              full_path: `/${newShare.title}/高清电影_4K_HDR_${item.shareCode}.mkv`,
-              share_code: item.shareCode,
-              receive_code: item.receiveCode,
-              share_title: newShare.title,
-            },
-            {
-              id: mockShareId * 10 + 3,
-              share_id: mockShareId,
-              file_115_id: `fid_${mockShareId}_2`,
-              parent_115_id: `cid_${mockShareId}`,
-              name: `全套无损原声大碟_FLAC_${item.shareCode}.flac`,
-              extension: 'flac',
-              size: 1073741824,
-              is_dir: false,
-              sha1: 'b91c83e019283746192837461928374619283746',
-              full_path: `/${newShare.title}/全套无损原声大碟_FLAC_${item.shareCode}.flac`,
-              share_code: item.shareCode,
-              receive_code: item.receiveCode,
-              share_title: newShare.title,
-            },
-          ];
-
-          onImportSuccess(newShare, newFiles);
+          onImportSuccess(newShare, []);
         });
 
         allLogs.push(`✅ 第 ${bIndex + 1}/${chunks.length} 批已成功提交入库 (共 ${chunk.length} 条，入队 ${queuedThisBatch} 条)`);

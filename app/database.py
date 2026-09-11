@@ -179,16 +179,17 @@ async def init_db() -> None:
     # 自动执行历史存量数据库平滑迁移 (增补缺失列并清洗 NULL)
     await ensure_database_schema_compatibility()
 
-    # Auto-seed initial demo shares and file tree if empty and not disabled
+    # Auto-seed initial demo shares and file tree ONLY if explicitly enabled via AUTO_SEED_DEMO_DATA=true
     try:
         import os
-        auto_seed_env = os.environ.get("AUTO_SEED_DEMO_DATA", "true").strip().lower()
-        if auto_seed_env in ("false", "0", "no", "off"):
-            logger.info("Auto-seed initial demo data skipped as AUTO_SEED_DEMO_DATA is disabled.")
-        else:
+        auto_seed_env = os.environ.get("AUTO_SEED_DEMO_DATA", "false").strip().lower()
+        if auto_seed_env in ("true", "1", "yes", "on"):
+            logger.info("AUTO_SEED_DEMO_DATA is enabled. Checking if demo data needs to be seeded...")
             from app.seed import seed_initial_demo_data
             await seed_initial_demo_data(force=False)
+        else:
+            logger.info("Auto-seed demo data disabled (clean production database mode). Ready for real 115 share links.")
     except Exception as seed_err:
-        logger.warning(f"Auto-seed initial demo data skipped or failed: {seed_err}")
+        logger.warning(f"Auto-seed demo data check encountered error: {seed_err}")
 
     logger.info("Database initialization completed successfully.")

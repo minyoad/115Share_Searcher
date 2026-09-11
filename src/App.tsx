@@ -24,7 +24,6 @@ import {
   Key, 
   ShieldAlert 
 } from 'lucide-react';
-import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
 import { SearchEngineView } from './components/SearchEngineView';
 import { ShareTaskManager } from './components/ShareTaskManager';
 import { CodeExplorer } from './components/CodeExplorer';
@@ -45,10 +44,13 @@ const getInitialShares = (): ShareRecord[] => {
     const saved = localStorage.getItem('115_persisted_shares');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) {
+        const demoCodes = ['sw38914kremux', 'sw398cslearning', 'sw377flachifi'];
+        return parsed.filter((s: any) => !demoCodes.includes(s.share_code));
+      }
     }
   } catch {}
-  return INITIAL_SHARES;
+  return [];
 };
 
 const getInitialFiles = (): FileRecord[] => {
@@ -56,10 +58,13 @@ const getInitialFiles = (): FileRecord[] => {
     const saved = localStorage.getItem('115_persisted_files');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) {
+        const demoCodes = ['sw38914kremux', 'sw398cslearning', 'sw377flachifi'];
+        return parsed.filter((f: any) => !demoCodes.includes(f.share_code));
+      }
     }
   } catch {}
-  return INITIAL_FILES;
+  return [];
 };
 
 export default function App() {
@@ -115,17 +120,16 @@ export default function App() {
   const fetchSharesFromBackend = async (silent = true) => {
     setIsLoadingShares(true);
     try {
-      const res = await fetch('/api/v1/shares?page=1&page_size=200');
+      const res = await fetch('/api/v1/shares?page=1&page_size=500');
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.items)) {
-          if (data.items.length > 0) {
-            setShares(data.items);
-            setIsBackendConnected(true);
-            try {
-              localStorage.setItem('115_persisted_shares', JSON.stringify(data.items));
-            } catch {}
-          }
+          // Always set backend items to display true database state
+          setShares(data.items);
+          setIsBackendConnected(true);
+          try {
+            localStorage.setItem('115_persisted_shares', JSON.stringify(data.items));
+          } catch {}
           if (!silent) {
             showToast(`已从 PostgreSQL 同步 ${data.items.length} 条真实分享记录！`);
           }
@@ -142,25 +146,94 @@ export default function App() {
   useEffect(() => {
     fetchSharesFromBackend(true);
     fetchAdSenseConfig();
+
+    // Setup real-time WebSocket connection for background crawler updates
+    let ws: WebSocket | null = null;
+    let wsReconnectTimer: any = null;
+    let pollInterval: any = null;
+
+    const connectWs = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/tasks`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          setIsBackendConnected(true);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.event === 'shares_data' && Array.isArray(msg.data?.items)) {
+              setShares(msg.data.items);
+              setIsBackendConnected(true);
+              try {
+                localStorage.setItem('115_persisted_shares', JSON.stringify(msg.data.items));
+              } catch {}
+            } else if (
+              msg.event === 'task_completed' || 
+              msg.event === 'task_progress' || 
+              msg.event === 'task_failed' || 
+              msg.event === 'task_enqueued' ||
+              msg.event === 'shares_batch_deleted' || 
+              msg.event === 'share_deleted'
+            ) {
+              fetchSharesFromBackend(true);
+            }
+          } catch {}
+        };
+
+        ws.onclose = () => {
+          wsReconnectTimer = setTimeout(connectWs, 3000);
+        };
+
+        ws.onerror = () => {
+          try { ws?.close(); } catch {}
+        };
+      } catch {
+        wsReconnectTimer = setTimeout(connectWs, 3000);
+      }
+    };
+
+    connectWs();
+
+    // Fallback polling every 4s if any shares are still crawling (status === 0)
+    pollInterval = setInterval(() => {
+      setShares(current => {
+        if (current.some(s => s.status === 0)) {
+          fetchSharesFromBackend(true);
+        }
+        return current;
+      });
+    }, 4000);
+
+    return () => {
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+      clearTimeout(wsReconnectTimer);
+      clearInterval(pollInterval);
+    };
   }, []);
 
-  const handleResetToDemo = async () => {
-    if (!window.confirm('确定要恢复为系统默认演示数据吗？当前所有测试分享及缓存将被重置为初始演示状态。')) return;
+  const handleCleanAllShares = async () => {
+    if (!window.confirm('警告：确定要彻底清空所有分享任务和已索引文件吗？此操作不可撤销！')) return;
     try {
-      const res = await fetch('/api/v1/shares/seed-demo', { method: 'POST' });
-      if (res.ok) {
-        await fetchSharesFromBackend(false);
-        showToast('已成功恢复系统演示数据！');
-        return;
-      }
-    } catch {}
-    setShares(INITIAL_SHARES);
-    setFiles(INITIAL_FILES);
+      const res = await fetch('/api/v1/shares/clean-all', { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      showToast(data?.message || '已彻底清空所有任务与文件！');
+    } catch {
+      showToast('已提交清空请求');
+    }
+    setShares([]);
+    setFiles([]);
     try {
-      localStorage.setItem('115_persisted_shares', JSON.stringify(INITIAL_SHARES));
-      localStorage.setItem('115_persisted_files', JSON.stringify(INITIAL_FILES));
+      localStorage.removeItem('115_persisted_shares');
+      localStorage.removeItem('115_persisted_files');
     } catch {}
-    showToast('已成功恢复系统演示数据！');
+    setTimeout(() => fetchSharesFromBackend(true), 500);
   };
 
   // Admin Authorization State
@@ -215,62 +288,53 @@ export default function App() {
     setActiveTab(tab);
   };
 
-  const handleImportSuccess = (newShare: ShareRecord, newFiles: FileRecord[]) => {
-    setShares(prev => {
-      const exists = prev.find(s => s.share_code === newShare.share_code);
-      const next = exists
-        ? prev.map(s => s.share_code === newShare.share_code ? { ...s, status: 0 } : s)
-        : [newShare, ...prev];
-      try {
-        localStorage.setItem('115_persisted_shares', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-    setFiles(prev => {
-      const next = [...newFiles, ...prev];
-      try {
-        localStorage.setItem('115_persisted_files', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-    showToast(`成功收录分享：${newShare.title}`);
+  const handleImportSuccess = (newShare?: ShareRecord, newFiles?: FileRecord[]) => {
+    if (newShare) {
+      setShares(prev => {
+        const exists = prev.find(s => s.share_code === newShare.share_code);
+        const next = exists
+          ? prev.map(s => s.share_code === newShare.share_code ? { ...s, status: 0 } : s)
+          : [newShare, ...prev];
+        try {
+          localStorage.setItem('115_persisted_shares', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      if (newFiles && newFiles.length > 0) {
+        setFiles(prev => {
+          const next = [...newFiles, ...prev];
+          try {
+            localStorage.setItem('115_persisted_files', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+      }
+      showToast(`成功收录分享：${newShare.title}`);
+    } else {
+      showToast('🎉 新分享链接已成功提交入库！');
+    }
     setTimeout(() => {
       fetchSharesFromBackend(true);
-    }, 1000);
+    }, 600);
   };
 
   const handleTriggerCrawl = async (shareCode: string, receiveCode: string) => {
     setShares(prev =>
       prev.map(s => (s.share_code === shareCode ? { ...s, status: 0 } : s))
     );
-    showToast(`已开始后台爬取任务：${shareCode}`);
+    showToast(`🚀 已将分享 ${shareCode} 推入后台爬取队列`);
 
     try {
-      await fetch(`/api/v1/shares/${encodeURIComponent(shareCode)}/crawl`, { method: 'POST' });
+      const res = await fetch(`/api/v1/shares/${encodeURIComponent(shareCode)}/crawl`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        setTimeout(() => fetchSharesFromBackend(true), 1200);
+      }
     } catch (e) {
       console.warn('Crawl API error:', e);
     }
-
-    // Simulate crawler completion after 1.5s
-    setTimeout(async () => {
-      await fetchSharesFromBackend(true);
-      setShares(prev =>
-        prev.map(s => {
-          if (s.share_code === shareCode) {
-            return {
-              ...s,
-              status: 1,
-              file_count: s.file_count > 0 ? s.file_count : 18,
-              folder_count: s.folder_count > 0 ? s.folder_count : 3,
-              total_size: s.total_size > 0 ? s.total_size : 10737418240,
-              last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19)
-            };
-          }
-          return s;
-        })
-      );
-      showToast(`分享 ${shareCode} 抓取并索引完成！`);
-    }, 1500);
   };
 
   const handleBatchTriggerCrawl = async (shareCodes: string[]) => {
@@ -619,7 +683,7 @@ export default function App() {
                   onBatchTriggerCrawl={handleBatchTriggerCrawl}
                   onExportShares={handleExportShares}
                   onRefreshShares={() => fetchSharesFromBackend(false)}
-                  onResetToDemo={handleResetToDemo}
+                  onCleanAllShares={handleCleanAllShares}
                   isBackendConnected={isBackendConnected}
                   isLoadingShares={isLoadingShares}
                 />

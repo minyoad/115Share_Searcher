@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   ListChecks, 
   Play, 
@@ -33,7 +33,7 @@ interface ShareTaskManagerProps {
   onDeleteShare?: (shareCode: string) => void;
   onBatchDeleteShares?: (shareCodes: string[]) => void;
   onRefreshShares?: () => void;
-  onResetToDemo?: () => void;
+  onCleanAllShares?: () => void;
   isBackendConnected?: boolean;
   isLoadingShares?: boolean;
 }
@@ -50,7 +50,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   onDeleteShare,
   onBatchDeleteShares,
   onRefreshShares,
-  onResetToDemo,
+  onCleanAllShares,
   isBackendConnected = false,
   isLoadingShares = false,
 }) => {
@@ -402,15 +402,16 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               <span>导出全量</span>
             </button>
 
-            {/* Reset to Demo Data button */}
-            {onResetToDemo && (
+            {/* Clean All Shares */}
+            {onCleanAllShares && shares.length > 0 && (
               <button 
-                onClick={onResetToDemo}
-                className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-800 border border-slate-200 font-medium rounded-lg transition shadow-2xs flex items-center gap-1 min-h-[36px]"
-                title="恢复系统初始默认演示数据（用于重置或演示测试）"
+                type="button"
+                onClick={onCleanAllShares}
+                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-medium rounded-lg transition shadow-2xs flex items-center gap-1 min-h-[36px] cursor-pointer"
+                title="彻底清空全部任务与文件（数据库清空重置）"
               >
-                <Database className="w-3.5 h-3.5 text-slate-400" />
-                <span>重置演示数据</span>
+                <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                <span>清空全部</span>
               </button>
             )}
 
@@ -419,7 +420,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               <button 
                 onClick={() => setShowBatchDeleteConfirm(true)}
                 disabled={selectedShareCodes.length === 0}
-                className="flex-1 sm:flex-none justify-center px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px]"
+                className="flex-1 sm:flex-none justify-center px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-lg transition shadow-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed min-h-[36px] cursor-pointer"
                 title="批量移除选中的分享链接及其名下的全部关联文件"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -585,10 +586,32 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               </div>
             );
           })
+        ) : shares.length === 0 ? (
+          <div className="text-center py-14 sm:py-20 bg-white rounded-2xl border border-dashed border-slate-300 text-slate-500 p-6 space-y-4 max-w-xl mx-auto my-6 shadow-xs animate-in fade-in">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+              <FolderTree className="w-8 h-8" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-slate-800">当前任务监控中暂无分享链接</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                当前系统运行在纯净生产模式，等待接收您的真实 115 资源链接。点击下方按钮即可批量录入分享，后台爬虫将全自动递归抓取目录树并建立全文检索索引。
+              </p>
+            </div>
+            <div className="flex items-center justify-center pt-2">
+              <button
+                type="button"
+                onClick={onOpenImport}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition shadow-sm flex items-center gap-2 cursor-pointer active:scale-95"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>批量提交 115 分享链接</span>
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="text-center py-12 sm:py-16 bg-white rounded-2xl border border-slate-200 text-slate-500 p-4">
-            <p className="text-base font-semibold text-slate-700">暂无符合条件的分享任务</p>
-            <p className="text-xs mt-1">您可以点击上方「提交新链接」录入需要爬取的 115 分享。</p>
+            <p className="text-base font-semibold text-slate-700">暂无符合当前筛选条件的分享任务</p>
+            <p className="text-xs mt-1">您可以调整关键词搜索或状态筛选标签查看其它任务。</p>
           </div>
         )}
       </div>

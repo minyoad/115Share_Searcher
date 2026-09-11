@@ -118,172 +118,13 @@ function aistudioApiMockPlugin(): Plugin {
         };
         (globalThis as any).__mockSettings = mockSettings;
 
-        const defaultMockShares = [
-          {
-            id: 1,
-            share_code: 'sw38914kremux',
-            receive_code: '4k88',
-            title: '4K UHD HDR 原盘电影与高码率蓝光合集 (2024)',
-            file_count: 38,
-            folder_count: 6,
-            total_size: 1984279930880,
-            status: 1,
-            created_at: '2025-01-15 14:20:00',
-            last_crawled_at: '2025-01-15 14:25:32',
-          },
-          {
-            id: 2,
-            share_code: 'sw398cslearning',
-            receive_code: 'cs24',
-            title: '计算机核心课程架构师进阶与经典电子书精选',
-            file_count: 142,
-            folder_count: 12,
-            total_size: 48920194880,
-            status: 1,
-            created_at: '2025-02-10 09:12:00',
-            last_crawled_at: '2025-02-10 09:18:14',
-          },
-          {
-            id: 3,
-            share_code: 'sw377flachifi',
-            receive_code: '',
-            title: '母带级 Hi-Res 24bit/96kHz 无损音乐精选集',
-            file_count: 85,
-            folder_count: 8,
-            total_size: 128994827000,
-            status: 1,
-            created_at: '2025-02-28 18:40:00',
-            last_crawled_at: '2025-02-28 18:42:50',
-          },
-        ];
+        const defaultMockShares: any[] = [];
+        const defaultMockFiles: any[] = [];
 
-        const defaultMockFiles = [
-          {
-            id: 101,
-            share_id: 1,
-            file_115_id: 'cid_1001',
-            parent_115_id: '0',
-            name: '科幻电影',
-            extension: '',
-            size: 0,
-            is_dir: true,
-            sha1: '',
-            full_path: '/科幻电影',
-            share_code: 'sw38914kremux',
-            receive_code: '4k88',
-            share_title: '4K UHD HDR 原盘电影与高码率蓝光合集 (2024)',
-          },
-          {
-            id: 102,
-            share_id: 1,
-            file_115_id: 'fid_2001',
-            parent_115_id: 'cid_1001',
-            name: '星际穿越.Interstellar.2014.IMAX.2160p.UHD.HDR.BluRay.x265.TrueHD.7.1.Atmos.mkv',
-            extension: 'mkv',
-            size: 68719476736,
-            is_dir: false,
-            sha1: '3A5B89F0E1D2C3B4A5968778E9D0C1B2A3F4E5D6',
-            full_path: '/科幻电影/星际穿越.Interstellar.2014.IMAX.2160p.UHD.HDR.BluRay.x265.TrueHD.7.1.Atmos.mkv',
-            share_code: 'sw38914kremux',
-            receive_code: '4k88',
-            share_title: '4K UHD HDR 原盘电影与高码率蓝光合集 (2024)',
-          },
-          {
-            id: 103,
-            share_id: 1,
-            file_115_id: 'fid_2002',
-            parent_115_id: 'cid_1001',
-            name: '奥本海默.Oppenheimer.2023.2160p.UHD.BluRay.HEVC.DTS-HD.MA.5.1.mkv',
-            extension: 'mkv',
-            size: 79456894976,
-            is_dir: false,
-            sha1: '8C7D6E5F4A3B2C1D0E9F8A7B6C5D4E3F2A1B0C9D',
-            full_path: '/科幻电影/奥本海默.Oppenheimer.2023.2160p.UHD.BluRay.HEVC.DTS-HD.MA.5.1.mkv',
-            share_code: 'sw38914kremux',
-            receive_code: '4k88',
-            share_title: '4K UHD HDR 原盘电影与高码率蓝光合集 (2024)',
-          },
-          {
-            id: 104,
-            share_id: 1,
-            file_115_id: 'fid_2003',
-            parent_115_id: 'cid_1001',
-            name: '沙丘2.Dune.Part.Two.2024.2160p.Dolby.Vision.Atmos.mkv',
-            extension: 'mkv',
-            size: 45097156608,
-            is_dir: false,
-            sha1: '1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0C',
-            full_path: '/科幻电影/沙丘2.Dune.Part.Two.2024.2160p.Dolby.Vision.Atmos.mkv',
-            share_code: 'sw38914kremux',
-            receive_code: '4k88',
-            share_title: '4K UHD HDR 原盘电影与高码率蓝光合集 (2024)',
-          },
-          {
-            id: 201,
-            share_id: 2,
-            file_115_id: 'cid_2001',
-            parent_115_id: '0',
-            name: '系统架构与分布式',
-            extension: '',
-            size: 0,
-            is_dir: true,
-            sha1: '',
-            full_path: '/系统架构与分布式',
-            share_code: 'sw398cslearning',
-            receive_code: 'cs24',
-            share_title: '计算机核心课程架构师进阶与经典电子书精选',
-          },
-          {
-            id: 202,
-            share_id: 2,
-            file_115_id: 'fid_3001',
-            parent_115_id: 'cid_2001',
-            name: 'Designing Data-Intensive Applications (DDIA中文版深入理解分布式系统).pdf',
-            extension: 'pdf',
-            size: 89128960,
-            is_dir: false,
-            sha1: 'F1E2D3C4B5A697887766554433221100FFAABBCC',
-            full_path: '/系统架构与分布式/Designing Data-Intensive Applications (DDIA中文版深入理解分布式系统).pdf',
-            share_code: 'sw398cslearning',
-            receive_code: 'cs24',
-            share_title: '计算机核心课程架构师进阶与经典电子书精选',
-          },
-          {
-            id: 301,
-            share_id: 3,
-            file_115_id: 'cid_3001',
-            parent_115_id: '0',
-            name: '电影原声OST',
-            extension: '',
-            size: 0,
-            is_dir: true,
-            sha1: '',
-            full_path: '/电影原声OST',
-            share_code: 'sw377flachifi',
-            receive_code: '',
-            share_title: '母带级 Hi-Res 24bit/96kHz 无损音乐精选集',
-          },
-          {
-            id: 302,
-            share_id: 3,
-            file_115_id: 'fid_4001',
-            parent_115_id: 'cid_3001',
-            name: 'Hans Zimmer - Live in Prague (24bit-96kHz Hi-Res FLAC).flac',
-            extension: 'flac',
-            size: 2894069760,
-            is_dir: false,
-            sha1: 'A9B8C7D6E5F4A3B2C1D09E8F7A6B5C4D3E2F1A0B',
-            full_path: '/电影原声OST/Hans Zimmer - Live in Prague (24bit-96kHz Hi-Res FLAC).flac',
-            share_code: 'sw377flachifi',
-            receive_code: '',
-            share_title: '母带级 Hi-Res 24bit/96kHz 无损音乐精选集',
-          }
-        ];
-
-        let mockShares: any[] = (globalThis as any).__mockShares || defaultMockShares;
+        let mockShares: any[] = (globalThis as any).__mockShares || [];
         (globalThis as any).__mockShares = mockShares;
 
-        let mockFiles: any[] = (globalThis as any).__mockFiles || defaultMockFiles;
+        let mockFiles: any[] = (globalThis as any).__mockFiles || [];
         (globalThis as any).__mockFiles = mockFiles;
 
         // 1. Admin Verification
@@ -450,20 +291,6 @@ function aistudioApiMockPlugin(): Plugin {
             status: 'success',
             crawled_count: codes.length,
             message: `成功完成 ${codes.length} 个分享的重新爬取与索引！`
-          });
-        }
-
-        // 4.5 Seed Demo Shares POST
-        if (url === '/api/v1/shares/seed-demo' && method === 'POST') {
-          mockShares.length = 0;
-          mockShares.push(...defaultMockShares);
-          mockFiles.length = 0;
-          mockFiles.push(...defaultMockFiles);
-          return sendJson(200, {
-            success: true,
-            shares_seeded: defaultMockShares.length,
-            files_seeded: defaultMockFiles.length,
-            message: `成功恢复系统演示分享数据（${defaultMockShares.length} 条分享，${defaultMockFiles.length} 个文件节点）！`
           });
         }
 
