@@ -641,6 +641,7 @@ export default function App() {
                 <SystemSettingsView 
                   onShowToast={showToast} 
                   onSettingsSaved={fetchAdSenseConfig} 
+                  onNavigateToTab={(tab) => setActiveTab(tab)}
                 />
               )}
             </>

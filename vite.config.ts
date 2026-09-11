@@ -615,17 +615,9 @@ function aistudioApiMockPlugin(): Plugin {
                   { key: 'STUCK_TASK_CHECK_INTERVAL', title: '死锁看门狗巡检周期 (秒)', description: '后台自动探测卡死或假死任务的检测间隔', type: 'int', category: 'worker', default: 60, current: Number(mockSettings.STUCK_TASK_CHECK_INTERVAL) || 60, is_modified: mockSettings.STUCK_TASK_CHECK_INTERVAL !== 60, sensitive: false },
                   { key: 'STUCK_TASK_TIMEOUT_SECONDS', title: '任务僵死判定超时 (秒)', description: '超过此时间无进度的抓取任务将被自动释放并恢复', type: 'int', category: 'worker', default: 300, current: Number(mockSettings.STUCK_TASK_TIMEOUT_SECONDS) || 300, is_modified: mockSettings.STUCK_TASK_TIMEOUT_SECONDS !== 300, sensitive: false }
                 ]
-              },
-              {
-                id: 'proxy',
-                name: '代理池与网络中继',
-                items: [
-                  { key: 'PROXY_MODE', title: '代理模式', description: '可选值: OFF (直连), STATIC (单静态代理), POOL_API (动态提取), CUSTOM_LIST (列表)', type: 'string', category: 'proxy', default: 'OFF', current: mockSettings.PROXY_MODE || 'OFF', is_modified: mockSettings.PROXY_MODE !== 'OFF', sensitive: false },
-                  { key: 'PROXY_URL', title: '单个静态代理地址', description: '如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080', type: 'string', category: 'proxy', default: '', current: mockSettings.PROXY_URL || '', is_modified: !!mockSettings.PROXY_URL, sensitive: false }
-                ]
               }
             ],
-            total_count: 14
+            total_count: 12
           });
         }
 

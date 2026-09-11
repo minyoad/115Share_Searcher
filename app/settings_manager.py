@@ -326,12 +326,10 @@ SYSTEM_CONFIG_REGISTRY: Dict[str, Dict[str, Any]] = {
 }
 
 CATEGORY_NAMES = {
-    "crawler": "爬虫引擎与抓取频控",
-    "worker": "后台任务调度与看门狗",
-    "proxy": "代理池与网络中继",
-    "auth": "管理安全与授权",
+    "crawler": "115 爬虫与引擎频控",
     "adsense": "Google AdSense 商业化广告",
-    "general": "全局通用设置",
+    "worker": "后台任务调度与看门狗",
+    "auth": "管理安全与授权",
 }
 
 
@@ -438,6 +436,10 @@ class DatabaseSettingsManager:
 
         for key, meta in SYSTEM_CONFIG_REGISTRY.items():
             cat = meta.get("category", "general")
+            # 如果该分类不属于通用配置面板（例如已由专有控制台统一管理的 proxy 模块），则跳过输出，避免配置项重复与功能重叠
+            if cat not in CATEGORY_NAMES:
+                continue
+
             target_type = meta["type"]
             default_val = meta["default"]
 
@@ -466,8 +468,9 @@ class DatabaseSettingsManager:
             "categories": [
                 {"id": cat_id, "name": cat_name, "items": grouped.get(cat_id, [])}
                 for cat_id, cat_name in CATEGORY_NAMES.items()
+                if grouped.get(cat_id)
             ],
-            "total_count": len(SYSTEM_CONFIG_REGISTRY),
+            "total_count": sum(len(grouped.get(cat_id, [])) for cat_id in CATEGORY_NAMES.keys()),
         }
 
     async def update_settings(self, updates: Dict[str, Any], session: AsyncSession) -> Dict[str, Any]:
