@@ -5,16 +5,16 @@ services:
     container_name: 115_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-      POSTGRES_DB: db_115share
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-db_115share}
       TZ: Asia/Shanghai
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d db_115share"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-db_115share}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -47,8 +47,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/db_115share
-      - REDIS_URL=redis://:redis123@redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - TZ=Asia/Shanghai
     depends_on:
       postgres:
@@ -65,8 +65,8 @@ services:
     restart: unless-stopped
     command: python -m app.worker
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@postgres:5432/db_115share
-      - REDIS_URL=redis://:redis123@redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-db_115share}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - TZ=Asia/Shanghai
     depends_on:
       postgres:

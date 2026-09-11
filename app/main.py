@@ -811,7 +811,7 @@ async def batch_import_shares(
     summary="全文及多维度检索 115 资源文件",
 )
 async def search_resources(
-    keyword: str = Query(..., min_length=1, max_length=200, description="搜索关键词 (支持模糊检索及文件全路径匹配)"),
+    keyword: Optional[str] = Query("", max_length=200, description="搜索关键词 (支持模糊检索及文件全路径匹配)"),
     extension: Optional[str] = Query(None, description="文件扩展名筛选 (如 mkv, mp4, pdf, zip, iso)"),
     is_dir: Optional[bool] = Query(False, description="是否仅检索目录 (默认 false 仅检索文件)"),
     min_size: Optional[int] = Query(None, ge=0, description="最小文件大小 (Bytes)"),
@@ -832,9 +832,10 @@ async def search_resources(
     ]
 
     # Clean keyword
-    clean_kw = keyword.strip()
-    # PostgreSQL trigram / ILIKE path search
-    base_conditions.append(File.full_path.ilike(f"%{clean_kw}%"))
+    clean_kw = (keyword or "").strip()
+    if clean_kw:
+        # PostgreSQL trigram / ILIKE path search
+        base_conditions.append(File.full_path.ilike(f"%{clean_kw}%"))
 
     # Extension filter
     if extension:

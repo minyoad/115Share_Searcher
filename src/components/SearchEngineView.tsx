@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   Filter, 
@@ -25,7 +25,9 @@ import {
   Puzzle,
   HelpCircle,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { FileRecord, ShareRecord, AdSenseConfig } from '../types';
 import { CidHelperModal } from './CidHelperModal';
@@ -88,6 +90,15 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
   const [copiedLink, setCopiedLink] = useState<number | null>(null);
   const [isCidHelperOpen, setIsCidHelperOpen] = useState(false);
   const [shareCodeToDelete, setShareCodeToDelete] = useState<{ code: string; title: string } | null>(null);
+
+  // Real Backend PostgreSQL Search Integration
+  const [backendItems, setBackendItems] = useState<FileRecord[] | null>(null);
+  const [backendTotal, setBackendTotal] = useState<number | null>(null);
+  const [backendTotalPages, setBackendTotalPages] = useState<number>(1);
+  const [isSearchingBackend, setIsSearchingBackend] = useState<boolean>(false);
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const pageSize = 20;
 
   // Popular / Hot searches states
   const [selectedHotCat, setSelectedHotCat] = useState<'all' | 'movie' | 'tech' | 'music' | 'doc'>('all');
@@ -194,8 +205,75 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
     setShuffleOffset(prev => prev + 3);
   };
 
-  // Filtered Results with PostgreSQL Trigram & Full Path Simulation
-  const searchResults = useMemo(() => {
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [keyword, selectedExt, isDirFilter, sizeFilter]);
+
+  // Query Backend PostgreSQL /api/v1/search
+  useEffect(() => {
+    let isCancelled = false;
+    const executeSearch = async () => {
+      setIsSearchingBackend(true);
+      try {
+        const params = new URLSearchParams();
+        if (keyword.trim()) params.set('keyword', keyword.trim());
+        if (selectedExt) params.set('extension', selectedExt);
+        params.set('is_dir', String(isDirFilter));
+        params.set('page', String(currentPage));
+        params.set('page_size', String(pageSize));
+
+        if (sizeFilter === 'small') {
+          params.set('max_size', String(100 * 1024 * 1024));
+        } else if (sizeFilter === 'medium') {
+          params.set('min_size', String(100 * 1024 * 1024));
+          params.set('max_size', String(1024 * 1024 * 1024));
+        } else if (sizeFilter === 'large') {
+          params.set('min_size', String(1024 * 1024 * 1024));
+          params.set('max_size', String(10 * 1024 * 1024 * 1024));
+        } else if (sizeFilter === 'huge') {
+          params.set('min_size', String(10 * 1024 * 1024 * 1024));
+        }
+
+        const res = await fetch(`/api/v1/search?${params.toString()}`);
+        if (!isCancelled) {
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.items)) {
+              setBackendItems(data.items);
+              setBackendTotal(typeof data.total === 'number' ? data.total : data.items.length);
+              setBackendTotalPages(data.total_pages || 1);
+              setIsBackendConnected(true);
+              return;
+            }
+          }
+          // Backend offline or non-200, fallback to local search
+          setBackendItems(null);
+          setBackendTotal(null);
+          setIsBackendConnected(false);
+        }
+      } catch {
+        if (!isCancelled) {
+          setBackendItems(null);
+          setBackendTotal(null);
+          setIsBackendConnected(false);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsSearchingBackend(false);
+        }
+      }
+    };
+
+    const timer = setTimeout(executeSearch, 250);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [keyword, selectedExt, isDirFilter, sizeFilter, currentPage]);
+
+  // Fallback Local Filtered Results
+  const localSearchResults = useMemo(() => {
     return files.filter(f => {
       // Check share status
       const share = shares.find(s => s.id === f.share_id);
@@ -225,6 +303,11 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
       return true;
     });
   }, [files, shares, keyword, selectedExt, isDirFilter, sizeFilter]);
+
+  // Combined Results & Totals
+  const searchResults = backendItems !== null ? backendItems : localSearchResults;
+  const totalCount = backendTotal !== null ? backendTotal : localSearchResults.length;
+  const totalPages = backendItems !== null ? backendTotalPages : Math.ceil(localSearchResults.length / pageSize) || 1;
 
   const handleCopyNodeId = (id: string) => {
     navigator.clipboard.writeText(id);
@@ -484,8 +567,23 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-slate-500 px-1">
         <span className="flex items-center gap-1.5 flex-wrap">
           <Database className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-          <span>PostgreSQL 索引收录: <strong className="text-slate-800 font-semibold">{files.length}</strong> 节点</span>
-          <span>· 当前匹配: <strong className="text-blue-600 font-bold">{searchResults.length}</strong> 条</span>
+          {isBackendConnected ? (
+            <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              PostgreSQL 实时索引检索
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-slate-700 font-medium bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+              本地检索模式
+            </span>
+          )}
+          <span>· 当前匹配: <strong className="text-blue-600 font-bold">{totalCount}</strong> 条</span>
+          {isSearchingBackend && (
+            <span className="flex items-center gap-1 text-slate-400">
+              <RotateCw className="w-3 h-3 animate-spin text-blue-500" />
+              <span>正在检索...</span>
+            </span>
+          )}
         </span>
         <button
           onClick={() => setIsCidHelperOpen(true)}
@@ -699,6 +797,44 @@ export const SearchEngineView: React.FC<SearchEngineViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-2xs text-xs">
+          <div className="text-slate-500">
+            共 <strong className="text-slate-900 font-semibold">{totalCount}</strong> 条检索结果，当前显示第 <strong className="text-blue-600 font-bold">{currentPage}</strong> / {totalPages} 页
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentPage(p => Math.max(1, p - 1));
+                window.scrollTo({ top: 300, behavior: 'smooth' });
+              }}
+              disabled={currentPage <= 1 || isSearchingBackend}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 transition shadow-2xs font-medium"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span>上一页</span>
+            </button>
+            <div className="px-3 py-1 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-bold text-xs">
+              {currentPage} / {totalPages}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentPage(p => Math.min(totalPages, p + 1));
+                window.scrollTo({ top: 300, behavior: 'smooth' });
+              }}
+              disabled={currentPage >= totalPages || isSearchingBackend}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 transition shadow-2xs font-medium"
+            >
+              <span>下一页</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* CID Jump & Tampermonkey Modal */}
       <CidHelperModal

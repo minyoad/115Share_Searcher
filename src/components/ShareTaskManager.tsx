@@ -32,6 +32,10 @@ interface ShareTaskManagerProps {
   onExportShares?: (shareCodes?: string[]) => void;
   onDeleteShare?: (shareCode: string) => void;
   onBatchDeleteShares?: (shareCodes: string[]) => void;
+  onRefreshShares?: () => void;
+  onResetToDemo?: () => void;
+  isBackendConnected?: boolean;
+  isLoadingShares?: boolean;
 }
 
 export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
@@ -45,6 +49,10 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   onExportShares,
   onDeleteShare,
   onBatchDeleteShares,
+  onRefreshShares,
+  onResetToDemo,
+  isBackendConnected = false,
+  isLoadingShares = false,
 }) => {
   const [filterStatus, setFilterStatus] = useState<number | null>(null);
   const [searchKw, setSearchKw] = useState('');
@@ -210,10 +218,21 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
       {/* Filter and Action Header */}
       <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-3 sm:space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <ListChecks className="w-5 h-5 text-blue-600 shrink-0" />
             <h2 className="text-sm sm:text-base font-bold text-slate-900">115 分享链接爬取状态监控</h2>
             <span className="text-xs text-slate-400">({filteredShares.length} 条)</span>
+            {isBackendConnected ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                PostgreSQL 实时连接
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                本地持久化存储
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -227,6 +246,18 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
                 className="w-full pl-8 pr-3 py-2 sm:py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none min-h-[38px] sm:min-h-[auto]"
               />
             </div>
+            {onRefreshShares && (
+              <button
+                type="button"
+                onClick={onRefreshShares}
+                disabled={isLoadingShares}
+                className="px-3 py-2 sm:py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-2xs shrink-0 min-h-[38px] sm:min-h-[auto] active:scale-95 disabled:opacity-50"
+                title="重新从后端 PostgreSQL 数据库读取并同步最新分享状态"
+              >
+                <RotateCw className={`w-3.5 h-3.5 ${isLoadingShares ? 'animate-spin text-blue-600' : ''}`} />
+                <span className="hidden sm:inline">刷新数据</span>
+              </button>
+            )}
             <button
               onClick={onOpenImport}
               className="px-3.5 py-2 sm:py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-xs shrink-0 min-h-[38px] sm:min-h-[auto] active:scale-95"
@@ -370,6 +401,18 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               <FileJson className="w-3.5 h-3.5 text-slate-500" />
               <span>导出全量</span>
             </button>
+
+            {/* Reset to Demo Data button */}
+            {onResetToDemo && (
+              <button 
+                onClick={onResetToDemo}
+                className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-800 border border-slate-200 font-medium rounded-lg transition shadow-2xs flex items-center gap-1 min-h-[36px]"
+                title="恢复系统初始默认演示数据（用于重置或演示测试）"
+              >
+                <Database className="w-3.5 h-3.5 text-slate-400" />
+                <span>重置演示数据</span>
+              </button>
+            )}
 
             {/* Batch Delete Selected Links & Cascade Files */}
             {onBatchDeleteShares && (

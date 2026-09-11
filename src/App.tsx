@@ -40,15 +40,52 @@ import { ActiveTab, FileRecord, ShareRecord, AdSenseConfig } from './types';
 
 const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy', 'settings'];
 
+const getInitialShares = (): ShareRecord[] => {
+  try {
+    const saved = localStorage.getItem('115_persisted_shares');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return INITIAL_SHARES;
+};
+
+const getInitialFiles = (): FileRecord[] => {
+  try {
+    const saved = localStorage.getItem('115_persisted_files');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return INITIAL_FILES;
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('search');
-  const [shares, setShares] = useState<ShareRecord[]>(INITIAL_SHARES);
-  const [files, setFiles] = useState<FileRecord[]>(INITIAL_FILES);
+  const [shares, setShares] = useState<ShareRecord[]>(getInitialShares);
+  const [files, setFiles] = useState<FileRecord[]>(getInitialFiles);
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
+  const [isLoadingShares, setIsLoadingShares] = useState<boolean>(false);
   const [treeShareCode, setTreeShareCode] = useState<string>('');
   const [treeTargetCid, setTreeTargetCid] = useState<string>('0');
   const [treeHighlightId, setTreeHighlightId] = useState<string>('');
   const [toastMsg, setToastMsg] = useState<string>('');
   const [mobileMoreOpen, setMobileMoreOpen] = useState<boolean>(false);
+
+  // Synchronize state changes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('115_persisted_shares', JSON.stringify(shares));
+    } catch {}
+  }, [shares]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('115_persisted_files', JSON.stringify(files));
+    } catch {}
+  }, [files]);
 
   // Google AdSense Commercial Integration State
   const [adsenseConfig, setAdSenseConfig] = useState<AdSenseConfig | null>(() => {
@@ -75,9 +112,56 @@ export default function App() {
     }
   };
 
+  const fetchSharesFromBackend = async (silent = true) => {
+    setIsLoadingShares(true);
+    try {
+      const res = await fetch('/api/v1/shares?page=1&page_size=200');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.items)) {
+          if (data.items.length > 0) {
+            setShares(data.items);
+            setIsBackendConnected(true);
+            try {
+              localStorage.setItem('115_persisted_shares', JSON.stringify(data.items));
+            } catch {}
+          }
+          if (!silent) {
+            showToast(`已从 PostgreSQL 同步 ${data.items.length} 条真实分享记录！`);
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Backend /api/v1/shares unreachable, keeping local storage state:', e);
+    } finally {
+      setIsLoadingShares(false);
+    }
+  };
+
   useEffect(() => {
+    fetchSharesFromBackend(true);
     fetchAdSenseConfig();
   }, []);
+
+  const handleResetToDemo = async () => {
+    if (!window.confirm('确定要恢复为系统默认演示数据吗？当前所有测试分享及缓存将被重置为初始演示状态。')) return;
+    try {
+      const res = await fetch('/api/v1/shares/seed-demo', { method: 'POST' });
+      if (res.ok) {
+        await fetchSharesFromBackend(false);
+        showToast('已成功恢复系统演示数据！');
+        return;
+      }
+    } catch {}
+    setShares(INITIAL_SHARES);
+    setFiles(INITIAL_FILES);
+    try {
+      localStorage.setItem('115_persisted_shares', JSON.stringify(INITIAL_SHARES));
+      localStorage.setItem('115_persisted_files', JSON.stringify(INITIAL_FILES));
+    } catch {}
+    showToast('已成功恢复系统演示数据！');
+  };
 
   // Admin Authorization State
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
@@ -134,23 +218,42 @@ export default function App() {
   const handleImportSuccess = (newShare: ShareRecord, newFiles: FileRecord[]) => {
     setShares(prev => {
       const exists = prev.find(s => s.share_code === newShare.share_code);
-      if (exists) {
-        return prev.map(s => s.share_code === newShare.share_code ? { ...s, status: 0 } : s);
-      }
-      return [newShare, ...prev];
+      const next = exists
+        ? prev.map(s => s.share_code === newShare.share_code ? { ...s, status: 0 } : s)
+        : [newShare, ...prev];
+      try {
+        localStorage.setItem('115_persisted_shares', JSON.stringify(next));
+      } catch {}
+      return next;
     });
-    setFiles(prev => [...newFiles, ...prev]);
+    setFiles(prev => {
+      const next = [...newFiles, ...prev];
+      try {
+        localStorage.setItem('115_persisted_files', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     showToast(`成功收录分享：${newShare.title}`);
+    setTimeout(() => {
+      fetchSharesFromBackend(true);
+    }, 1000);
   };
 
-  const handleTriggerCrawl = (shareCode: string, receiveCode: string) => {
+  const handleTriggerCrawl = async (shareCode: string, receiveCode: string) => {
     setShares(prev =>
       prev.map(s => (s.share_code === shareCode ? { ...s, status: 0 } : s))
     );
     showToast(`已开始后台爬取任务：${shareCode}`);
 
+    try {
+      await fetch(`/api/v1/shares/${encodeURIComponent(shareCode)}/crawl`, { method: 'POST' });
+    } catch (e) {
+      console.warn('Crawl API error:', e);
+    }
+
     // Simulate crawler completion after 1.5s
-    setTimeout(() => {
+    setTimeout(async () => {
+      await fetchSharesFromBackend(true);
       setShares(prev =>
         prev.map(s => {
           if (s.share_code === shareCode) {
@@ -170,28 +273,24 @@ export default function App() {
     }, 1500);
   };
 
-  const handleBatchTriggerCrawl = (shareCodes: string[]) => {
+  const handleBatchTriggerCrawl = async (shareCodes: string[]) => {
     setShares(prev =>
       prev.map(s => (shareCodes.includes(s.share_code) ? { ...s, status: 0 } : s))
     );
     showToast(`🚀 已批量为选中的 ${shareCodes.length} 个分享重新发送抓取与索引指令！`);
 
-    setTimeout(() => {
-      setShares(prev =>
-        prev.map(s => {
-          if (shareCodes.includes(s.share_code)) {
-            return {
-              ...s,
-              status: 1,
-              file_count: s.file_count > 0 ? s.file_count : 24,
-              folder_count: s.folder_count > 0 ? s.folder_count : 4,
-              total_size: s.total_size > 0 ? s.total_size : 12884901888,
-              last_crawled_at: new Date().toISOString().replace('T', ' ').substring(0, 19)
-            };
-          }
-          return s;
-        })
-      );
+    try {
+      await fetch('/api/v1/shares/batch-crawl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ share_codes: shareCodes }),
+      });
+    } catch (e) {
+      console.warn('Batch crawl API error:', e);
+    }
+
+    setTimeout(async () => {
+      await fetchSharesFromBackend(true);
       showToast(`✅ 选中的 ${shareCodes.length} 个分享重新抓取并更新完成！`);
     }, 1800);
   };
@@ -533,6 +632,10 @@ export default function App() {
                   onOpenImport={() => setActiveTab('import')}
                   onBatchTriggerCrawl={handleBatchTriggerCrawl}
                   onExportShares={handleExportShares}
+                  onRefreshShares={() => fetchSharesFromBackend(false)}
+                  onResetToDemo={handleResetToDemo}
+                  isBackendConnected={isBackendConnected}
+                  isLoadingShares={isLoadingShares}
                 />
               )}
 
