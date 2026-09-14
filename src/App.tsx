@@ -35,6 +35,7 @@ import { ProxyManagerView } from './components/ProxyManagerView';
 import { SystemSettingsView } from './components/SystemSettingsView';
 import { AdminAuthModal } from './components/AdminAuthModal';
 import { AdminConsoleBar } from './components/AdminConsoleBar';
+import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
 import { ActiveTab, FileRecord, ShareRecord, AdSenseConfig } from './types';
 
 const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy', 'settings'];
@@ -44,13 +45,12 @@ const getInitialShares = (): ShareRecord[] => {
     const saved = localStorage.getItem('115_persisted_shares');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        const demoCodes = ['sw38914kremux', 'sw398cslearning', 'sw377flachifi'];
-        return parsed.filter((s: any) => !demoCodes.includes(s.share_code));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
       }
     }
   } catch {}
-  return [];
+  return INITIAL_SHARES;
 };
 
 const getInitialFiles = (): FileRecord[] => {
@@ -58,13 +58,12 @@ const getInitialFiles = (): FileRecord[] => {
     const saved = localStorage.getItem('115_persisted_files');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        const demoCodes = ['sw38914kremux', 'sw398cslearning', 'sw377flachifi'];
-        return parsed.filter((f: any) => !demoCodes.includes(f.share_code));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
       }
     }
   } catch {}
-  return [];
+  return INITIAL_FILES;
 };
 
 export default function App() {
