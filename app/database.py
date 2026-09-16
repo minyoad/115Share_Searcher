@@ -26,7 +26,9 @@ engine: AsyncEngine = create_async_engine(
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_timeout=settings.DB_POOL_TIMEOUT,
+    pool_recycle=getattr(settings, "DB_POOL_RECYCLE", 1800),
     pool_pre_ping=True,
+    pool_reset_on_return="rollback",
 )
 
 # Async Session Factory

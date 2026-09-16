@@ -20,9 +20,10 @@ class Settings(BaseSettings):
         default="postgresql+asyncpg://postgres:postgres123@localhost:5432/db_115share",
         description="Async PostgreSQL connection string"
     )
-    DB_POOL_SIZE: int = 20
-    DB_MAX_OVERFLOW: int = 10
-    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_SIZE: int = Field(default=30, description="SQLAlchemy connection pool base size")
+    DB_MAX_OVERFLOW: int = Field(default=20, description="SQLAlchemy connection pool max overflow")
+    DB_POOL_TIMEOUT: int = Field(default=45, description="Connection checkout timeout in seconds")
+    DB_POOL_RECYCLE: int = Field(default=1800, description="Connection recycle interval in seconds to prevent stale pool connections")
     DB_ECHO: bool = False
 
     # Redis Settings

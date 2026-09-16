@@ -349,26 +349,8 @@ async def list_shares(
     if status is not None:
         conditions.append(Share.status == status)
 
-    # Global Stats (cast to int to avoid PostgreSQL Decimal/numeric non-serializable objects)
-    total_shares_count = int((await db.execute(select(func.count(Share.id)))).scalar() or 0)
-    active_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.ACTIVE.value))).scalar() or 0)
-    pending_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.PENDING.value))).scalar() or 0)
-    expired_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.EXPIRED.value))).scalar() or 0)
-    banned_shares_count = int((await db.execute(select(func.count(Share.id)).where(Share.status == ShareStatus.BANNED.value))).scalar() or 0)
-
-    total_files_sum = int((await db.execute(select(func.coalesce(func.sum(Share.file_count), 0)))).scalar() or 0)
-    total_size_sum = int((await db.execute(select(func.coalesce(func.sum(Share.total_size), 0)))).scalar() or 0)
-
-    stats_payload = {
-        "total_shares": total_shares_count,
-        "active_shares": active_shares_count,
-        "pending_shares": pending_shares_count,
-        "expired_shares": expired_shares_count,
-        "banned_shares": banned_shares_count,
-        "total_files": total_files_sum,
-        "total_size": total_size_sum,
-        "total_size_formatted": format_size(total_size_sum),
-    }
+    # 高性能全局统计：单 SQL 聚合 + 2.5 秒内存缓存，避免频繁全表扫描耗尽数据库连接池
+    stats_payload = await TaskWebSocketManager.get_instance().get_global_stats(db=db, max_age=2.5)
 
     # Count query for current filter
     count_stmt = select(func.count(Share.id))

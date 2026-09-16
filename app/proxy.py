@@ -124,49 +124,58 @@ class ProxyManager:
 
     async def sync_runtime_state_to_db(self, force: bool = False):
         """
-        将当前进程的代理运行状态（当前承载 IP、各节点成功/失败数、延迟、405 封禁）异步保存至 DB，供 Web API 端与其他进程实时感知
+        将当前进程的代理运行状态（当前承载 IP、各节点成功/失败数、延迟、405 封禁）异步保存至 DB，供 Web API 端与其他进程实时感知。
+        使用单例互斥锁与平滑防抖，杜绝高频并发写入导致数据库连接池耗尽。
         """
-        now = time.time()
-        if not force and (now - getattr(self, "_last_db_state_sync", 0.0)) < 1.0:
+        if not hasattr(self, "_db_sync_lock"):
+            self._db_sync_lock = asyncio.Lock()
+
+        # 如果已有同步协程在排队或执行，直接跳过，防止并发膨胀
+        if self._db_sync_lock.locked():
             return
 
-        self._last_db_state_sync = now
-        try:
-            nodes_dict = {}
-            for url, node in self.pool.items():
-                nodes_dict[url] = {
-                    "success_count": node.success_count,
-                    "failure_count": node.failure_count,
-                    "consecutive_failures": node.consecutive_failures,
-                    "is_banned_405": node.is_banned_405,
-                    "banned_until": node.banned_until,
-                    "last_latency_ms": node.last_latency_ms,
-                    "last_used_at": node.last_used_at,
+        now = time.time()
+        if not force and (now - getattr(self, "_last_db_state_sync", 0.0)) < 5.0:
+            return
+
+        async with self._db_sync_lock:
+            self._last_db_state_sync = time.time()
+            try:
+                nodes_dict = {}
+                for url, node in self.pool.items():
+                    nodes_dict[url] = {
+                        "success_count": node.success_count,
+                        "failure_count": node.failure_count,
+                        "consecutive_failures": node.consecutive_failures,
+                        "is_banned_405": node.is_banned_405,
+                        "banned_until": node.banned_until,
+                        "last_latency_ms": node.last_latency_ms,
+                        "last_used_at": node.last_used_at,
+                    }
+
+                payload = {
+                    "current_sticky_proxy": self._current_sticky_proxy,
+                    "last_refresh_time": self.last_refresh_time,
+                    "nodes": nodes_dict,
+                    "updated_at": now,
                 }
 
-            payload = {
-                "current_sticky_proxy": self._current_sticky_proxy,
-                "last_refresh_time": self.last_refresh_time,
-                "nodes": nodes_dict,
-                "updated_at": now,
-            }
-
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(SystemSetting).where(SystemSetting.key == CONFIG_KEY_PROXY_RUNTIME)
-                )
-                setting_obj = result.scalar_one_or_none()
-                if setting_obj is None:
-                    setting_obj = SystemSetting(
-                        key=CONFIG_KEY_PROXY_RUNTIME,
-                        value=json.dumps(payload, ensure_ascii=False)
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(SystemSetting).where(SystemSetting.key == CONFIG_KEY_PROXY_RUNTIME)
                     )
-                    db.add(setting_obj)
-                else:
-                    setting_obj.value = json.dumps(payload, ensure_ascii=False)
-                await db.commit()
-        except Exception as exc:
-            logger.debug(f"[ProxyManager] Sync runtime state to DB failed: {exc}")
+                    setting_obj = result.scalar_one_or_none()
+                    if setting_obj is None:
+                        setting_obj = SystemSetting(
+                            key=CONFIG_KEY_PROXY_RUNTIME,
+                            value=json.dumps(payload, ensure_ascii=False)
+                        )
+                        db.add(setting_obj)
+                    else:
+                        setting_obj.value = json.dumps(payload, ensure_ascii=False)
+                    await db.commit()
+            except Exception as exc:
+                logger.debug(f"[ProxyManager] Sync runtime state to DB failed: {exc}")
 
     async def load_runtime_state_from_db(self):
         """
@@ -426,6 +435,7 @@ class ProxyManager:
                 if self.mode != "OFF" and self.pool:
                     logger.info("[ProxyManager] Executing background health check for all proxies in pool...")
                     await self.health_check_all_proxies()
+                await self.sync_runtime_state_to_db()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -640,14 +650,12 @@ class ProxyManager:
                 chosen = available_nodes[0]
                 chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
-                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
             elif strategy == "rotate_per_request" or force_rotate:
                 chosen = random.choice(available_nodes)
                 chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
-                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
             elif strategy == "round_robin":
@@ -655,7 +663,6 @@ class ProxyManager:
                 chosen = available_nodes[self.current_index]
                 chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
-                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
             else:  # rotate_on_error / sticky
@@ -663,13 +670,11 @@ class ProxyManager:
                     sticky_node = self.pool[self._current_sticky_proxy]
                     if sticky_node.is_available and not force_rotate:
                         sticky_node.last_used_at = time.time()
-                        asyncio.create_task(self.sync_runtime_state_to_db())
                         return self._current_sticky_proxy
 
                 chosen = random.choice(available_nodes)
                 chosen.last_used_at = time.time()
                 self._current_sticky_proxy = chosen.url
-                asyncio.create_task(self.sync_runtime_state_to_db())
                 return chosen.url
 
     def get_available_count(self) -> int:
@@ -701,7 +706,6 @@ class ProxyManager:
         async with self.lock:
             if proxy_url in self.pool:
                 self.pool[proxy_url].mark_success(latency_ms)
-                asyncio.create_task(self.sync_runtime_state_to_db())
 
     async def mark_failure(self, proxy_url: Optional[str], is_405: bool = False, reason: str = ""):
         if not proxy_url:
@@ -712,7 +716,8 @@ class ProxyManager:
                 # 如果当前 sticky 代理失败，清空 sticky 促使下次换新 IP
                 if self._current_sticky_proxy == proxy_url:
                     self._current_sticky_proxy = None
-                asyncio.create_task(self.sync_runtime_state_to_db())
+                if is_405:
+                    asyncio.create_task(self.sync_runtime_state_to_db(force=True))
 
     async def test_proxy(self, proxy_url: Optional[str] = None) -> Dict[str, Any]:
         """测试指定代理或当前可用代理对 115 的连通性"""
