@@ -182,13 +182,38 @@ async def serve_cid_helper_script():
     return HTMLResponse("// Userscript not found", status_code=404)
 
 
+@app.get("/health")
 @app.get("/api/v1/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint: validates service status and components"""
+    db_status = "unknown"
+    redis_status = "unknown"
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)[:50]}"
+
+    try:
+        ws_mgr = TaskWebSocketManager.get_instance()
+        r = await ws_mgr._get_redis()
+        if r and await r.ping():
+            redis_status = "connected"
+        else:
+            redis_status = "disconnected"
+    except Exception as e:
+        redis_status = f"unhealthy: {str(e)[:50]}"
+
+    overall_status = "healthy" if db_status == "connected" else "degraded"
+
     return {
-        "status": "healthy",
+        "status": overall_status,
         "service": settings.PROJECT_NAME,
         "version": settings.PROJECT_VERSION,
+        "database": db_status,
+        "redis": redis_status,
     }
 
 
