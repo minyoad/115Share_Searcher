@@ -19,6 +19,17 @@ export interface ShareRecord {
   last_crawled_at: string;
 }
 
+export interface ShareGlobalStats {
+  total_shares: number;
+  active_shares: number;
+  pending_shares: number;
+  expired_shares: number;
+  banned_shares: number;
+  total_files: number;
+  total_size: number;
+  total_size_formatted: string;
+}
+
 export interface FileRecord {
   id: number;
   share_id: number;

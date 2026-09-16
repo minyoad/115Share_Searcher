@@ -36,7 +36,7 @@ import { SystemSettingsView } from './components/SystemSettingsView';
 import { AdminAuthModal } from './components/AdminAuthModal';
 import { AdminConsoleBar } from './components/AdminConsoleBar';
 import { INITIAL_SHARES, INITIAL_FILES } from './data/mockDatabase';
-import { ActiveTab, FileRecord, ShareRecord, AdSenseConfig } from './types';
+import { ActiveTab, FileRecord, ShareRecord, ShareGlobalStats, AdSenseConfig } from './types';
 
 const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy', 'settings'];
 
@@ -73,6 +73,7 @@ const getInitialFiles = (): FileRecord[] => {
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('search');
   const [shares, setShares] = useState<ShareRecord[]>(getInitialShares);
+  const [globalStats, setGlobalStats] = useState<ShareGlobalStats | null>(null);
   const [files, setFiles] = useState<FileRecord[]>(getInitialFiles);
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
   const [isLoadingShares, setIsLoadingShares] = useState<boolean>(false);
@@ -131,6 +132,9 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.items)) {
+          if (data.stats) {
+            setGlobalStats(data.stats);
+          }
           let allItems = [...data.items];
           const totalCount = data.total || data.stats?.total_shares || allItems.length;
           const totalPages = data.total_pages || Math.ceil(totalCount / (data.page_size || 100));
@@ -199,11 +203,39 @@ export default function App() {
             const msg = JSON.parse(event.data);
             const msgType = msg.type || msg.event;
             if ((msgType === 'shares_data' || msgType === 'connected') && Array.isArray(msg.data?.items)) {
-              setShares(msg.data.items);
               setIsBackendConnected(true);
-              try {
-                localStorage.setItem('115_persisted_shares', JSON.stringify(msg.data.items));
-              } catch {}
+              if (msg.data?.stats) {
+                setGlobalStats(msg.data.stats);
+              }
+              const incomingItems: ShareRecord[] = msg.data.items;
+              setShares(current => {
+                // If local current array has more items than this incoming batch (e.g. 600+ vs 20),
+                // merge incoming items into current by share_code or id instead of overwriting,
+                // so the task count does not jump or collapse down to a single page!
+                if (current.length > incomingItems.length) {
+                  const incomingMap = new Map<string, ShareRecord>();
+                  incomingItems.forEach(item => {
+                    if (item.share_code) incomingMap.set(item.share_code, item);
+                  });
+                  const merged = current.map(item => incomingMap.get(item.share_code) || item);
+                  // Also append any new shares that were not yet in current
+                  const existingCodes = new Set(current.map(c => c.share_code));
+                  incomingItems.forEach(item => {
+                    if (!existingCodes.has(item.share_code)) {
+                      merged.unshift(item);
+                    }
+                  });
+                  try {
+                    localStorage.setItem('115_persisted_shares', JSON.stringify(merged));
+                  } catch {}
+                  return merged;
+                } else {
+                  try {
+                    localStorage.setItem('115_persisted_shares', JSON.stringify(incomingItems));
+                  } catch {}
+                  return incomingItems;
+                }
+              });
             } else if (
               msgType === 'task_completed' || 
               msgType === 'task_progress' || 
@@ -536,7 +568,9 @@ export default function App() {
     }
   };
 
-  const pendingCount = shares.filter(s => s.status === 0).length;
+  const pendingCount = (globalStats && typeof globalStats.pending_shares === 'number')
+    ? globalStats.pending_shares
+    : shares.filter(s => s.status === 0).length;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
@@ -708,6 +742,7 @@ export default function App() {
               {activeTab === 'tasks' && (
                 <ShareTaskManager
                   shares={shares}
+                  globalStats={globalStats}
                   onTriggerCrawl={handleTriggerCrawl}
                   onOpenTree={handleOpenTree}
                   onSearchByShare={handleSearchByShare}

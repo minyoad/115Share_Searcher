@@ -23,10 +23,11 @@ import {
   ChevronsLeft,
   ChevronsRight
 } from 'lucide-react';
-import { ShareRecord } from '../types';
+import { ShareRecord, ShareGlobalStats } from '../types';
 
 interface ShareTaskManagerProps {
   shares: ShareRecord[];
+  globalStats?: ShareGlobalStats | null;
   onTriggerCrawl: (shareCode: string, receiveCode: string) => void;
   onOpenTree: (shareCode: string) => void;
   onSearchByShare: (shareCode: string) => void;
@@ -44,6 +45,7 @@ interface ShareTaskManagerProps {
 
 export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   shares,
+  globalStats = null,
   onTriggerCrawl,
   onOpenTree,
   onSearchByShare,
@@ -108,13 +110,25 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
     return `${size.toFixed(2)} ${units[idx]}`;
   };
 
-  // Stats calculation
-  const totalShares = shares.length;
-  const activeShares = shares.filter(s => s.status === 1).length;
-  const pendingShares = shares.filter(s => s.status === 0).length;
-  const expiredShares = shares.filter(s => s.status === 2 || s.status === 3).length;
-  const totalFiles = shares.reduce((acc, s) => acc + s.file_count, 0);
-  const totalBytes = shares.reduce((acc, s) => acc + s.total_size, 0);
+  // Stats calculation: prefer authoritative backend globalStats when available, fallback to local shares array
+  const totalShares = (globalStats && typeof globalStats.total_shares === 'number' && globalStats.total_shares > 0)
+    ? globalStats.total_shares
+    : shares.length;
+  const activeShares = (globalStats && typeof globalStats.active_shares === 'number')
+    ? globalStats.active_shares
+    : shares.filter(s => s.status === 1).length;
+  const pendingShares = (globalStats && typeof globalStats.pending_shares === 'number')
+    ? globalStats.pending_shares
+    : shares.filter(s => s.status === 0).length;
+  const expiredShares = (globalStats && (typeof globalStats.expired_shares === 'number' || typeof globalStats.banned_shares === 'number'))
+    ? (globalStats.expired_shares || 0) + (globalStats.banned_shares || 0)
+    : shares.filter(s => s.status === 2 || s.status === 3).length;
+  const totalFiles = (globalStats && typeof globalStats.total_files === 'number')
+    ? globalStats.total_files
+    : shares.reduce((acc, s) => acc + s.file_count, 0);
+  const totalBytes = (globalStats && typeof globalStats.total_size === 'number')
+    ? globalStats.total_size
+    : shares.reduce((acc, s) => acc + s.total_size, 0);
 
   // Filtering
   const filteredShares = shares.filter(s => {
