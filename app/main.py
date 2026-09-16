@@ -336,7 +336,7 @@ async def list_shares(
     keyword: Optional[str] = Query(None, description="搜索分享代码或标题"),
     status: Optional[int] = Query(None, description="状态筛选: 0=PENDING(抓取中), 1=ACTIVE(完成), 2=EXPIRED(失效), 3=BANNED(封禁)"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页条数"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -826,7 +826,7 @@ async def search_resources(
     min_size: Optional[int] = Query(None, ge=0, description="最小文件大小 (Bytes)"),
     max_size: Optional[int] = Query(None, ge=0, description="最大文件大小 (Bytes)"),
     page: int = Query(1, ge=1, description="分页页码 (从1开始)"),
-    page_size: int = Query(20, ge=1, le=100, description="每页结果条数 (1-100)"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页结果条数 (1-2000)"),
     db: AsyncSession = Depends(get_db),
 ):
     """

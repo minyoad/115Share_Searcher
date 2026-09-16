@@ -40,17 +40,20 @@ import { ActiveTab, FileRecord, ShareRecord, AdSenseConfig } from './types';
 
 const ADMIN_TABS: ActiveTab[] = ['tasks', 'import', 'crawler', 'proxy', 'settings'];
 
+const DEMO_CODES = ['sw38914kremux', 'sw398cslearning', 'sw377flachifi'];
+
 const getInitialShares = (): ShareRecord[] => {
   try {
     const saved = localStorage.getItem('115_persisted_shares');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        const realItems = parsed.filter((s: any) => !DEMO_CODES.includes(s.share_code));
+        if (realItems.length > 0) return realItems;
       }
     }
   } catch {}
-  return INITIAL_SHARES;
+  return [];
 };
 
 const getInitialFiles = (): FileRecord[] => {
@@ -59,11 +62,12 @@ const getInitialFiles = (): FileRecord[] => {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        const realFiles = parsed.filter((f: any) => !DEMO_CODES.includes(f.share_code));
+        if (realFiles.length > 0) return realFiles;
       }
     }
   } catch {}
-  return INITIAL_FILES;
+  return [];
 };
 
 export default function App() {
@@ -119,18 +123,47 @@ export default function App() {
   const fetchSharesFromBackend = async (silent = true) => {
     setIsLoadingShares(true);
     try {
-      const res = await fetch('/api/v1/shares?page=1&page_size=500');
+      // Use page_size=100 for universal compatibility with FastAPI le=100 and le=2000
+      let res = await fetch('/api/v1/shares?page=1&page_size=100');
+      if (!res.ok) {
+        res = await fetch('/api/v1/shares?page=1&page_size=20');
+      }
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.items)) {
-          // Always set backend items to display true database state
-          setShares(data.items);
+          let allItems = [...data.items];
+          const totalCount = data.total || data.stats?.total_shares || allItems.length;
+          const totalPages = data.total_pages || Math.ceil(totalCount / (data.page_size || 100));
+          if (totalPages > 1 && allItems.length < totalCount) {
+            try {
+              const fetchLimit = Math.min(totalPages, 15);
+              const promises = [];
+              for (let p = 2; p <= fetchLimit; p++) {
+                promises.push(
+                  fetch(`/api/v1/shares?page=${p}&page_size=100`)
+                    .then(r => r.ok ? r.json() : null)
+                    .then(d => d?.items || [])
+                    .catch(() => [])
+                );
+              }
+              const restBatches = await Promise.all(promises);
+              for (const batch of restBatches) {
+                if (Array.isArray(batch)) {
+                  allItems = allItems.concat(batch);
+                }
+              }
+            } catch (err) {
+              console.warn('Error fetching additional pages of shares:', err);
+            }
+          }
+
+          setShares(allItems);
           setIsBackendConnected(true);
           try {
-            localStorage.setItem('115_persisted_shares', JSON.stringify(data.items));
+            localStorage.setItem('115_persisted_shares', JSON.stringify(allItems));
           } catch {}
           if (!silent) {
-            showToast(`已从 PostgreSQL 同步 ${data.items.length} 条真实分享记录！`);
+            showToast(`已从 PostgreSQL 同步 ${allItems.length} 条真实分享记录！`);
           }
           return;
         }
@@ -164,19 +197,22 @@ export default function App() {
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.event === 'shares_data' && Array.isArray(msg.data?.items)) {
+            const msgType = msg.type || msg.event;
+            if ((msgType === 'shares_data' || msgType === 'connected') && Array.isArray(msg.data?.items)) {
               setShares(msg.data.items);
               setIsBackendConnected(true);
               try {
                 localStorage.setItem('115_persisted_shares', JSON.stringify(msg.data.items));
               } catch {}
             } else if (
-              msg.event === 'task_completed' || 
-              msg.event === 'task_progress' || 
-              msg.event === 'task_failed' || 
-              msg.event === 'task_enqueued' ||
-              msg.event === 'shares_batch_deleted' || 
-              msg.event === 'share_deleted'
+              msgType === 'task_completed' || 
+              msgType === 'task_progress' || 
+              msgType === 'task_failed' || 
+              msgType === 'task_enqueued' ||
+              msgType === 'shares_batch_deleted' || 
+              msgType === 'share_deleted' ||
+              msgType === 'task_event' ||
+              msg.event === 'all_tasks_completed'
             ) {
               fetchSharesFromBackend(true);
             }

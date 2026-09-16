@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ListChecks, 
   Play, 
@@ -17,7 +17,11 @@ import {
   Download,
   CheckSquare,
   FileJson,
-  Trash2
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 import { ShareRecord } from '../types';
 
@@ -62,6 +66,16 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
   const [syncingTitles, setSyncingTitles] = useState(false);
   const [shareToDelete, setShareToDelete] = useState<ShareRecord | null>(null);
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
+
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [jumpPageInput, setJumpPageInput] = useState<string>('');
+
+  // Reset page to 1 when filters or page size change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStatus, searchKw, pageSize]);
 
   const handleSyncTitles = async () => {
     try {
@@ -120,11 +134,58 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Batch selection methods
-  const isAllSelected = filteredShares.length > 0 && filteredShares.every(s => selectedShareCodes.includes(s.share_code));
+  // Pagination calculation
+  const totalPages = Math.max(1, Math.ceil(filteredShares.length / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
 
-  const toggleSelectAll = () => {
-    if (isAllSelected) {
+  const paginatedShares = useMemo(() => {
+    const start = (safeCurrentPage - 1) * pageSize;
+    return filteredShares.slice(start, start + pageSize);
+  }, [filteredShares, safeCurrentPage, pageSize]);
+
+  const startIndex = filteredShares.length > 0 ? (safeCurrentPage - 1) * pageSize + 1 : 0;
+  const endIndex = Math.min(safeCurrentPage * pageSize, filteredShares.length);
+
+  // Generate page numbers array with smart ellipsis
+  const pageNumbers = useMemo(() => {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages: (number | '...')[] = [1];
+    if (safeCurrentPage > 3) {
+      pages.push('...');
+    }
+    const start = Math.max(2, safeCurrentPage - 1);
+    const end = Math.min(totalPages - 1, safeCurrentPage + 1);
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    if (safeCurrentPage < totalPages - 2) {
+      pages.push('...');
+    }
+    pages.push(totalPages);
+    return pages;
+  }, [totalPages, safeCurrentPage]);
+
+  // Batch selection methods
+  const isPageAllSelected = paginatedShares.length > 0 && paginatedShares.every(s => selectedShareCodes.includes(s.share_code));
+  const isAllFilteredSelected = filteredShares.length > 0 && filteredShares.every(s => selectedShareCodes.includes(s.share_code));
+
+  // Toggle selection for current page
+  const toggleSelectPage = () => {
+    if (isPageAllSelected) {
+      const pageCodes = new Set(paginatedShares.map(s => s.share_code));
+      setSelectedShareCodes(prev => prev.filter(code => !pageCodes.has(code)));
+    } else {
+      const set = new Set(selectedShareCodes);
+      paginatedShares.forEach(s => set.add(s.share_code));
+      setSelectedShareCodes(Array.from(set));
+    }
+  };
+
+  // Toggle selection for all filtered shares across all pages
+  const toggleSelectAllFiltered = () => {
+    if (isAllFilteredSelected) {
       const filteredCodes = new Set(filteredShares.map(s => s.share_code));
       setSelectedShareCodes(prev => prev.filter(code => !filteredCodes.has(code)));
     } else {
@@ -134,9 +195,10 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
     }
   };
 
-  const invertSelection = () => {
+  // Invert selection on current page
+  const invertPageSelection = () => {
     const set = new Set(selectedShareCodes);
-    filteredShares.forEach(s => {
+    paginatedShares.forEach(s => {
       if (set.has(s.share_code)) {
         set.delete(s.share_code);
       } else {
@@ -321,19 +383,33 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
             <label className="flex items-center gap-1.5 cursor-pointer font-semibold text-slate-700 select-none hover:text-slate-900 transition min-h-[32px]">
               <input 
                 type="checkbox" 
-                checked={isAllSelected}
-                onChange={toggleSelectAll}
+                checked={isPageAllSelected}
+                onChange={toggleSelectPage}
                 className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
               />
-              <span>全选</span>
+              <span>全选本页 ({paginatedShares.length})</span>
             </label>
 
+            {filteredShares.length > pageSize && (
+              <button 
+                onClick={toggleSelectAllFiltered}
+                className={`px-2.5 py-1 border rounded-md transition font-medium shadow-2xs min-h-[30px] text-xs ${
+                  isAllFilteredSelected 
+                    ? 'bg-blue-50 border-blue-300 text-blue-700 font-semibold' 
+                    : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200'
+                }`}
+                title="一键勾选当前筛选条件下的全部跨页任务"
+              >
+                {isAllFilteredSelected ? '取消全选全部' : `全选所有 (${filteredShares.length} 条)`}
+              </button>
+            )}
+
             <button 
-              onClick={invertSelection}
+              onClick={invertPageSelection}
               className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md transition font-medium shadow-2xs min-h-[30px]"
-              title="反向选择当前列表项"
+              title="反向选择当前页的列表项"
             >
-              反选
+              反选本页
             </button>
 
             {selectedShareCodes.length > 0 ? (
@@ -342,7 +418,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
               </span>
             ) : (
               <span className="text-slate-400 pl-1 hidden sm:inline">
-                (勾选卡片复选框可进行批量操作或配置导出)
+                (勾选复选框可进行批量操作或配置导出)
               </span>
             )}
 
@@ -434,7 +510,7 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
       {/* Share Tasks List */}
       <div className="space-y-3">
         {filteredShares.length > 0 ? (
-          filteredShares.map((s) => {
+          paginatedShares.map((s) => {
             const pwdSuffix = s.receive_code ? `?password=${s.receive_code}` : '';
             const shareUrl = `https://115.com/s/${s.share_code}${pwdSuffix}`;
             const isPending = s.status === 0;
@@ -615,6 +691,139 @@ export const ShareTaskManager: React.FC<ShareTaskManagerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Pagination Controls Toolbar */}
+      {filteredShares.length > 0 && (
+        <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+          {/* Left: Summary and Page Size Selector */}
+          <div className="flex items-center gap-3 flex-wrap justify-center md:justify-start w-full md:w-auto">
+            <span>
+              显示第 <strong className="text-slate-800 font-bold">{startIndex}</strong> - <strong className="text-slate-800 font-bold">{endIndex}</strong> 条，共 <strong className="text-blue-600 font-bold">{filteredShares.length}</strong> 条任务
+            </span>
+
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 pl-1 border-l border-slate-200">
+              <span>每页</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="px-2 py-1 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
+              >
+                <option value={10}>10 条</option>
+                <option value={20}>20 条</option>
+                <option value={50}>50 条</option>
+                <option value={100}>100 条</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Right: Page Navigation Buttons & Quick Jump */}
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1.5 flex-wrap justify-center md:justify-end">
+              {/* First Page */}
+              <button
+                type="button"
+                onClick={() => setCurrentPage(1)}
+                disabled={safeCurrentPage <= 1}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-35 disabled:cursor-not-allowed transition"
+                title="第一页"
+              >
+                <ChevronsLeft className="w-4 h-4" />
+              </button>
+
+              {/* Prev Page */}
+              <button
+                type="button"
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={safeCurrentPage <= 1}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-35 disabled:cursor-not-allowed transition flex items-center gap-1 font-medium"
+                title="上一页"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">上一页</span>
+              </button>
+
+              {/* Page Numbers */}
+              <div className="flex items-center gap-1">
+                {pageNumbers.map((p, idx) => (
+                  p === '...' ? (
+                    <span key={`ellipsis-${idx}`} className="px-1 text-slate-400 select-none">…</span>
+                  ) : (
+                    <button
+                      type="button"
+                      key={`page-${p}`}
+                      onClick={() => setCurrentPage(Number(p))}
+                      className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold transition ${
+                        safeCurrentPage === p
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                ))}
+              </div>
+
+              {/* Next Page */}
+              <button
+                type="button"
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                disabled={safeCurrentPage >= totalPages}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-35 disabled:cursor-not-allowed transition flex items-center gap-1 font-medium"
+                title="下一页"
+              >
+                <span className="hidden sm:inline">下一页</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+
+              {/* Last Page */}
+              <button
+                type="button"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={safeCurrentPage >= totalPages}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-35 disabled:cursor-not-allowed transition"
+                title="最后一页"
+              >
+                <ChevronsRight className="w-4 h-4" />
+              </button>
+
+              {/* Jump Input Form */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const target = parseInt(jumpPageInput, 10);
+                  if (!isNaN(target) && target >= 1 && target <= totalPages) {
+                    setCurrentPage(target);
+                    setJumpPageInput('');
+                  }
+                }}
+                className="hidden sm:flex items-center gap-1 ml-1 text-xs text-slate-500"
+              >
+                <span>跳至</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={jumpPageInput}
+                  onChange={(e) => setJumpPageInput(e.target.value)}
+                  placeholder={String(safeCurrentPage)}
+                  className="w-12 px-1.5 py-1 text-center bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+                <span>页</span>
+                <button
+                  type="submit"
+                  className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium border border-slate-200 transition text-[11px]"
+                >
+                  确定
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Single Share Delete Confirmation Modal */}
       {shareToDelete && (
